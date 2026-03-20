@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "melos: bootstrap (pub get)",
+      "type": "shell",
+      "command": "dart",
+      "args": [
+        "run",
+        "melos",
+        "run",
+        "bootstrap"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "melos: codegen",
+      "type": "shell",
+      "command": "dart",
+      "args": [
+        "run",
+        "melos",
+        "run",
+        "codegen"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "melos: regenerate app icons",
+      "type": "shell",
+      "command": "dart",
+      "args": [
+        "run",
+        "melos",
+        "run",
+        "icons"
+      ],
+      "group": "build"
+    },
+    {
+      "label": "melos: all (pub get + codegen + icons)",
+      "type": "shell",
+      "command": "echo",
+      "args": [
+        "melos tasks finished"
+      ],
+      "dependsOn": [
+        "melos: bootstrap (pub get)",
+        "melos: codegen",
+        "melos: regenerate app icons"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build"
+    }
+  ]
+}

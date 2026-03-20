@@ -1,0 +1,220 @@
+Flutteによるクロスプラットフォームのアプリを作成してください。
+要件は以下ですが、実現困難であったり無理がある設計については指摘してください。
+また、こういった機能があったら良いなどアイデアがあれば提案してください。
+
+## 要件
+- 任意のバイナリデータをQRコードに変換する
+    - 大きなデータは複数のQRコードに分割する
+- QRコードを読み取りアプリ内にデータベースとして保存する
+    - 1つのデータが複数のQRコードに分割されていた場合も読み取れるようにする
+- 読み取ったQRコードはメタ情報を付与して管理する
+    - 名称
+    - 説明・メモ
+    - カテゴリタグ（検索に利用）
+    - サムネイル画像
+        - サムネイル画像は端末内のファイル、あるいはカメラ撮影して作成
+        - 画像は512x512サイズにトリミングして保存する。トリミングするUIも提供する。
+- データベース保存されたQRコードを名称、説明、メモ、カテゴリタグなどで検索できる
+    - 名称、説明、メモは任意テキストで1フィールドからあいまい検索できる
+    - カテゴリ検索はタグを複数指定できるようなUIとする
+- データベース保存したQRコードを画面上に表示する
+- アプリ上のQRコードデータベースをExportして別端末にもImportし相互運用する
+- Material3デザインガイドに則ったモダンなUIとしてください
+
+## QR入力方法
+変換するデータの入力方法は以下を想定します。
+- 端末のカメラからQRコードを認識する
+- アプリUIから入力したテキストデータ
+- アプリからファイル選択UIにて開いたファイル／アプリにドロップしてアップロードされたファイル
+
+## パッケージライブラリの前提
+以下のライブラリを利用してください。関連パッケージやコード生成を積極的に使って開発効率やメンテナンス性を向上させてください。
+- riverpod 3.x
+- freezed
+- auto_router
+
+## 対象プラットフォーム
+- Android
+- iOS
+- Mac OS
+- Windows
+- Web
+
+Flutterアプリを作るために有効な copilot-instructions.md や *.agetnt.md、Skillの定義ファイルを作成してください。
+基本的には高度なFlutterアプリの技術を持つ有識者として振舞ってほしい。
+また、実装を行った場合は同時にテストコードを作成しデグレードを防げるようにしてほしい。
+
+- Widget修正専用の instructionsを追加してください。
+- Riverpodを使う状態管理前提の agent/ skill に寄せてください。riverpodのバージョンは3.x系が前提です。
+- 画面遷移については auto_routeを使う前提で構成してください。
+- レビュー専用agentを追加して、Flutterコードレビュー観点を分離してください。
+- 英語の指示になっているので日本語化してください。
+
+以下の instructionも追加してください。
+- クラスや関数に対してドキュメントコメントを記述するようにしてください。
+- 内部処理についても、メンテナンスや理解のために意図が伝わるよう十分な日本語のコメントを記述してください。
+- コメントは日本語で付与するようにしてください。
+- テストケースの説明も日本語となるように指示してください。
+
+- スマートフォンアプリからのQRコード入力もカメラだけでなく、QRコードが表示された画像ファイル（スクリーンショットなど）からも読み込めるようにしてくだしあ。
+- テキスト入力をQRコード化したものを、あらためてアプリで読み込みましたがバイナリとして扱われて文字が読み込めません。一般的なQRコードリーダーとも互換が無いように見えます。改修してください。
+- 実装されたコードやテストにコメントが少ないです。日本語のコメントを充実させてください。同様に、テストケースの概要も日本語にして何をやっているかわかるようにしてください。
+- アプリの仕様などをあとで認識できるように仕様書を `docs/DESIGN.md` に記述してください。表や図(Mermaid)を使って分かりやすくお願いします。
+
+- プロジェクトを gitでバージョン管理したいが構成管理に不要なものを除外したい。
+- 適切な .gitignoreファイルを作成してください。
+
+- カメラでQRコードを認識した場合に、登録画面に遷移するが裏でスキャナーが動きづ付けており多重で登録画面がプッシュされてしまいます。おなじQRコードを連続で読み込まないようにしてください。
+- すでにDBに存在するQRコードを読み込んだ場合は、該当するデータのQRデータベースの編集画面に遷移するようにしてください。
+- QRのサムネイル画像をトリミングしようとしたらアプリがハングアップしました。不具合があるようなので調査し修正してください。
+- QRコードの表示サイズを大・中・小と変更できるようなUIを追加してください。大きさを任意で拡大縮小できるスライダーもつけてください。
+- 登録しているQRコードに「お気に入り」を設定できるようにしてください。
+    - お気に入りのQRコードはホーム画面で「お気に入り」欄で優先的に表示します。表示は折り畳みでコンパクトにできるようにしてください。
+    - お気に入りの登録はQRデータベースの詳細表示や編集画面、ホーム画面でお気に入りアイコンをタップするになります。
+- ホーム画面で登録済QRコードデータをカード表示する場合、説明文字列が長くなるとWidgetのレイアウトエラーとなります。表示できないサイズの場合に省略表示するようにしてください。
+- 機能追加や修正が発生した場合は、`docs/DESIGN.md`に反映修正してください。このルールは `copilot-instructions.md`にも反映してください。
+
+
+- QRコードの表示サイズの「小」プリセットが大きいので今の半分程度のサイズにしてください。
+- ホーム画面でQRコードデータのリストが表示されている状態で、データを長押し選択すると一括編集モード（削除）するモードとして編集できるようにしてください。
+    - 削除する際は、確認ダイアログを表示して警告をするようにしてください。
+    - QRコードのリストを名称、作成日、更新日で昇順・降順ソートできるようにしてください。
+- 独自のバイナリチャンク対応は互換性の問題があるため廃止して別のアプローチで対応するようにしてください。互換性最優先で、一般的なQRコードを読み込みデータベース登録し再現できるようにしてください。
+- QRコードのデータベースを目的に応じて複数持てるようにしてください。
+    - ホーム画面でにDBを切り替えるUIを追加します。タグなどの情報はDB単位で切り替えます。
+    - これに合わせてインポート・エクスポートもDB単位でおこな得るようにUIを改善してください。
+    - サムネイル画像512x512の制限を解除してください。画像幅の最大を512とします。また、1:1か任意のアスペクト比で選択しトリミングできるUIとしてください。
+- 検索時に任意文字列検索でタグの名前も対象となるように拡張してください。
+- QRコードが未登録の状態を許容し、登録済QRコード自体を編集であとから別のものに更新できるようにしてください。
+    - QRコードが未登録の場合は、サムネイル表示をグレーアウトして表示してください。
+    - QRコードが未登録かどうかを検索可能として条件としてフィルタできるUIを追加してください。
+
+- QRコードを更新する際、データ入力ではなくカメラあるいはQR画像ファイルから読み取って更新するようにしてください。
+- QRサイズ小のプリセットを 120px にしてください。小さすぎました。
+- チャンクプロトコルのレガシーコードは削除して良いです。
+- 一般的なQRコードを読み取り保存し再表示してみましたが元のQRコードと異なっているようです。同じQRを再現するようにして欲しいです（独自プロトコルは不要）。
+- ホーム画面のタイトルは `QR Code Manager` ではなく選択しているデータベース名を表示してください。データベース名が長すぎる場合、表示は省略して良いです。
+- データベースの切り替えUIが存在しないようです。ホーム画面でデータベース名（タイトル）をタップするとデータベースを切り替える、UIを表示して変更できるようにしてください。
+- 設定画面などでよいのでデータベースは個別に名前を付けて新規作成・削除を行えるようにしてしてください。
+- 画像トリミング時のエッジが画面端にあるためタッチ操作で掴むのが困難で操作性が悪いです。トリム画面はマージンを設けてください。
+- タグの登録はできますが、削除ができません。設定画面にタグ編集を行えるUI（あるいは画面への遷移）を追加してください。
+
+- データベースの名前入力・変更を行うダイアログでフリーズしてしまう。アプリが応答しなくなってしまうので問題の原因を調査し改修してください。
+- 起動時に表示するデータベースは最後に開いていたデータベースを開くようにしてください。
+- データリストの表示タイプ、ソート条件などはアプリ再起動しても保持するようにしてください。
+- QRデータを表示する際メタ情報は「名称」「説明」以外はアコーディオンなどで詳細表示をオンオフできるようにしてください。
+- QRデータ表示する際にサムネイルが登録されている場合、画像アスペクト比を考慮し可能な限り全体が表示されるようにしてください。また、サムネイルをタップすると画面中央にヒーローアニメーションで拡大表示して確認できるようにしてください。
+- QRデータを表示している状態で画面を左右スワイプすることで、前／次のQRデータの表示を切り替えられるようにしてください。表示はループさせます。
+    - 検索してから詳細表示している場合は、検索結果の範囲で左右スワイプで詳細切り替えられるようにします。
+    - QRのサムネイルの下にQRコードのプレビューを表示するようにしてください。いちいち表示画面に遷移するのが面倒なので。
+- 画像のトリミング時にトグルUIが初期で画像端にフィットしており掴みづらい。初期位置を考慮するか判定を大きくするなど操作しやすくしてください。
+- QRコードに登録されているデータがURLであった場合は、外部ブラウザで開く機能を追加してください。
+- QRコード表示画面でQR名称が画面下部に小さく表示されていますが、QRコードの上（画面上部固定で良い）にもう少し大きな文字で表示してください。
+- 設定画面でQRコードの初期表示サイズを設定できるようにしてください。この設定は保存しアプリ再起動後にも保持します。
+- お気に入りに登録した場合、リスト表示になってしまいますがカード表示の場合はカード表示を維持してください。
+
+Androidビルドでエラーがでています。確認して修正対応してください。
+その上でWidget Testを追加してくださお。
+
+また、以下の機能も追加してください。
+- QRコードスキャンを行うボタンが小さすぎて扱いづらいです。このアプリの主機能になるので画面下部中央に大きなボタンで表示するようにしてください。
+- QRコードにカテゴリ概念を追加し、ホーム画面で「お気に入り」と同様にカテゴリに属するQRコードをまとめて表示（アコーディオンで表示開閉可能）としてください。
+    - カテゴリの新規追加・削除・更新機能とUIを追加してください。カテゴリの表示順番は変更できるようにしてください。
+    - QRコードにカテゴリを設定するUIを追加してください。一括削除と同様にQRデータの長押しでカテゴリ編集モードに移行する感じよいです。
+
+- 必要なテストは追加してください。
+- 設定画面でカテゴリ追加やデータベースの新規追加した際に以下のエラーとなります。原因を調査し修正してください。
+```
+
+════════ Exception caught by foundation library ════════════════════════════════
+The following assertion was thrown while dispatching notifications for FocusNode:
+A TextEditingController was used after being disposed.
+Once you have called dispose() on a TextEditingController, it can no longer be used.
+
+When the exception was thrown, this was the stack:
+#0      ChangeNotifier.debugAssertNotDisposed.<anonymous closure> (package:flutter/src/foundation/change_notifier.dart:182:9)
+#1      ChangeNotifier.debugAssertNotDisposed (package:flutter/src/foundation/change_notifier.dart:189:6)
+#2      ChangeNotifier.notifyListeners (package:flutter/src/foundation/change_notifier.dart:411:27)
+#3      ValueNotifier.value= (package:flutter/src/foundation/change_notifier.dart:560:5)
+#4      TextEditingController.value= (package:flutter/src/widgets/editable_text.dart:292:11)
+#5      TextEditingController.clearComposing (package:flutter/src/widgets/editable_text.dart:379:5)
+#6      EditableTextState._openOrCloseInputConnectionIfNeeded (package:flutter/src/widgets/editable_text.dart:3997:25)
+#7      EditableTextState._handleFocusChanged (package:flutter/src/widgets/editable_text.dart:4753:5)
+#8      ChangeNotifier.notifyListeners (package:flutter/src/foundation/change_notifier.dart:432:24)
+#9      FocusNode._notify (package:flutter/src/widgets/focus_manager.dart:1131:5)
+#10     FocusManager.applyFocusChangesIfNeeded (package:flutter/src/widgets/focus_manager.dart:1995:12)
+(elided 2 frames from dart:async)
+
+The FocusNode sending notification was: FocusNode#283cf
+    context: Focus
+════════════════════════════════════════════════════════════════════════════════
+
+════════ Exception caught by widgets library ═══════════════════════════════════
+A TextEditingController was used after being disposed.
+The relevant error-causing widget was:
+    TextField TextField:file:///Users/hossie/development/qr_code_app/lib/features/settings/settings_page.dart:182:18
+════════════════════════════════════════════════════════════════════════════════
+I/ImeTracker(20094): com.example.qr_code_app:762b5d76: onRequestHide at ORIGIN_CLIENT reason HIDE_SOFT_INPUT fromUser false userId 0 displayId 0
+D/InsetsController(20094): hide(ime())
+D/WindowOnBackDispatcher(20094): setTopOnBackInvokedCallback (unwrapped): io.flutter.embedding.android.FlutterActivity$1@65d5a6b
+D/InsetsController(20094): Setting requestedVisibleTypes to 503 (was 511)
+D/VRI[MainActivity](20094): WindowInsets changed: ime:null
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+
+════════ Exception caught by widgets library ═══════════════════════════════════
+'package:flutter/src/widgets/framework.dart': Failed assertion: line 6268 pos 12: '_dependents.isEmpty': is not true.
+The relevant error-causing widget was:
+    MaterialApp MaterialApp:file:///Users/hossie/development/qr_code_app/lib/app.dart:23:24
+════════════════════════════════════════════════════════════════════════════════
+
+════════ Exception caught by scheduler library ═════════════════════════════════
+Tried to build dirty widget in the wrong build scope.
+════════════════════════════════════════════════════════════════════════════════
+I/ImeTracker(20094): system_server:97fe6193: onCancelled at PHASE_CLIENT_ON_CONTROLS_CHANGED
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+D/FlutterJNI(20094): Sending viewport metrics to the engine.
+W/RemoteInputConnectionImpl(20094): requestCursorUpdates on inactive InputConnection
+```
+
+- ホーム画面の下部に検索ボタンを追加してください。右側で良いです。
+- ホーム画面でお気に入りやカテゴリのアコーディオンを一括で閉じる・開くUIボタンを画面上部に追加してください。
+
+- `/assets/app_icon.jpg` にアプリアイコンを追加しました。これを `flutter_launcher_icons`を使ってアプリのアイコン設定してビルドしてください。
+- QRデータ詳細表示画面で表示される以下のボタンを画面下部にスティッキー表示して常時表示されるようにしてください。また、情報を編集するボタンも追加してください。
+    - QRコードを表示
+    - URLをブラウザで開く
+    - 情報を編集する
+- QRデータ詳細表示画面で左右スワイプに加え、画面中央左右にフローティングで次へ・戻るアイコンボタンを追加してください。
+- アプリ公開に向けて、README.mdにこのアプリの機能とと使い方を説明を追加してください。
+
+- QRデータ詳細表示画面で以下の調整をしてください。
+    - 次へ・戻るフローティングボタンが画面上部に寄っています。画面中央にセンタリングしてください。
+    - 画面下部のスティッキーボタンをもう少し大きくしてください。具体的にはボタン内ラベルをアイコン部分とラベル部分の2段構成にして、文字ラベルにマージンを設けてください。
+- 高度な設定として、QRコードの生成パラメータを変更できるUIを設定画面に追加してください。通常は設定UIをアコーディオンで隠しておいてください。
+
+- アプリ名称を変更します。名称は「プリQR」です。アプリビルド設定の表示名やドキュメントを修正してください。バージョンも1.0.0としてください。
+- QRデータ詳細画面が壊れてしまいました。ボトムのスティッキーボタンが画面全体に引き伸ばされてしまい他の操作が不能です。
+
+- QRデータ詳細画面の下部ボタンの並び順を変更してください。中央に「QRコードを表示」ボタンを配置してください。左側が「URLを開く」ボタンとします。右側が「情報を編集」ボタンとします。ボタンの角が丸すぎるので少し抑えてください。
+
+- QRデータ詳細画面でサムネイルをクリックして全体表示する際、ヒーローアニメーションで遷移するように修正してください。
+
+- アプリのパッケージ名、これはおそらくAndroidのみだと思われますがデフォルトの com.exampleとなっていますがこれを jp.co.geronekoとなるように修正してください。

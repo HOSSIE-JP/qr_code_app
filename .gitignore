@@ -1,0 +1,50 @@
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+*.orig
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# Logs / caches
+*.class
+*.log
+*.pyc
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder often contains shared settings, so keep it versioned by
+# default unless this project decides otherwise.
+#.vscode/
+
+# Flutter / Dart
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.fvm/
+.packages
+.pub/
+.pub-cache/
+pubspec_overrides.yaml
+/build/
+/coverage/
+
+# Symbolication / obfuscation outputs
+app.*.symbols
+app.*.map.json
+
+# Android build outputs
+/android/app/debug
+/android/app/profile
+/android/app/release
