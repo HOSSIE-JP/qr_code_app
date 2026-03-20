@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/providers.dart';
@@ -19,6 +21,8 @@ class ImportPage extends ConsumerStatefulWidget {
 }
 
 class _ImportPageState extends ConsumerState<ImportPage> {
+  static const int _maxImportFileSizeBytes = 80 * 1024 * 1024;
+
   bool _importing = false;
   String? _statusMessage;
 
@@ -100,9 +104,20 @@ class _ImportPageState extends ConsumerState<ImportPage> {
   Future<void> _importFile(String format) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
-      withData: true,
+      withData: kIsWeb,
     );
-    if (result == null || result.files.single.bytes == null) return;
+    if (result == null) return;
+
+    final file = result.files.single;
+    if (!kIsWeb && file.size > _maxImportFileSizeBytes) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ファイルサイズが大きすぎるため読み込めません（80MBまで）'),
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _importing = true;
@@ -111,14 +126,14 @@ class _ImportPageState extends ConsumerState<ImportPage> {
 
     try {
       final exportRepo = ref.read(exportRepositoryProvider);
-      final bytes = result.files.single.bytes!;
       final dbId = ref.read(currentDatabaseIdProvider);
       int importedCount;
 
       if (format == 'zip') {
+        final bytes = await _readFileBytes(file);
         importedCount = await exportRepo.importFromZip(bytes, databaseId: dbId);
       } else {
-        final jsonString = utf8.decode(bytes);
+        final jsonString = await _readFileAsString(file);
         importedCount = await exportRepo.importFromJson(
           jsonString,
           databaseId: dbId,
@@ -138,5 +153,29 @@ class _ImportPageState extends ConsumerState<ImportPage> {
     } finally {
       if (mounted) setState(() => _importing = false);
     }
+  }
+
+  /// 選択ファイルを UTF-8 文字列として読み込む。
+  Future<String> _readFileAsString(PlatformFile file) async {
+    if (file.bytes != null) {
+      return utf8.decode(file.bytes!);
+    }
+    final path = file.path;
+    if (path == null) {
+      throw StateError('ファイルパスを取得できませんでした');
+    }
+    return File(path).openRead().transform(utf8.decoder).join();
+  }
+
+  /// 選択ファイルをバイト列として読み込む。
+  Future<Uint8List> _readFileBytes(PlatformFile file) async {
+    if (file.bytes != null) {
+      return file.bytes!;
+    }
+    final path = file.path;
+    if (path == null) {
+      throw StateError('ファイルパスを取得できませんでした');
+    }
+    return File(path).readAsBytes();
   }
 }

@@ -26,8 +26,8 @@
 | **QR 再現性** | スキャン時の rawBytes をそのまま保存し、再表示時に元の QR を忠実に再現 |
 | **重複QR検出** | スキャン済みの QR が DB に存在する場合は編集画面へ自動遷移 |
 | **タグ管理** | エントリにタグを付与して分類・検索（タグ名でも全文検索可能）。設定画面でタグ名変更・削除が可能 |
-| **検索フィルタ** | 名称・説明・タグ名による全文検索 + QR 登録状態フィルタ |
-| **エクスポート/インポート** | ZIP (`.qrdb`) / JSON (`.qrjson`) 形式でデータベース単位のバックアップ・復元 |
+| **検索フィルタ** | 初期表示は全件、名称・説明・タグ名・QR登録状態で絞り込み |
+| **エクスポート/インポート** | ZIP (`.qrdb`) / JSON (`.qrjson`) 形式でDB単位のバックアップ・復元（カテゴリ対応、同名upsert） |
 | **設定** | テーマ切替（ライト/ダーク/システム連動）、データベース管理（新規作成・リネーム・削除）、タグ管理（リネーム・削除） |
 
 ### 対応プラットフォーム
@@ -458,14 +458,20 @@ sequenceDiagram
 
 | 形式 | 拡張子 | 内容 |
 |------|--------|------|
-| ZIP | `.qrdb` | `metadata.json` + サムネイル画像ファイル群 |
-| JSON | `.qrjson` | 全エントリ・タグ・チャンク・サムネイルを 1 ファイルに集約 |
+| ZIP | `.qrdb` | `metadata.json` / `entries.json` / `tags.json` / `categories.json` + `data/*.bin` + `thumbnails/*` |
+| JSON | `.qrjson` | エントリ・タグ・カテゴリ・サムネイルを 1 ファイルに集約 |
 
 ### ZIP 構成
 
 ```
 export.qrdb (ZIP)
-├── metadata.json      # エントリ一覧 + タグ情報
+├── metadata.json      # バージョン / 件数情報
+├── entries.json       # エントリメタ情報（バイナリ本体除く）
+├── tags.json          # タグ定義
+├── categories.json    # カテゴリ定義
+├── data/
+│   ├── {entry-id-1}.bin
+│   └── ...
 └── thumbnails/
     ├── {entry-id-1}.png
     ├── {entry-id-2}.png
@@ -484,8 +490,9 @@ flowchart TD
     Check -->|.qrjson| JSON["JSON パース"]
     ZIP --> Parse["metadata.json 読取"]
     JSON --> Parse
-    Parse --> Loop["エントリごとにループ"]
-    Loop --> Create["createEntry(databaseId: 現在のDB)"]
+    Parse --> UpsertMeta["カテゴリ/タグを先に復元（名称重複は再利用）"]
+    UpsertMeta --> Loop["エントリごとにループ"]
+    Loop --> Create["名称一致で upsert（同名は更新）"]
     Create --> Tags["タグ紐付け (DB 単位)"]
     Tags --> Thumb["サムネイル復元"]
     Thumb --> Done["完了"]

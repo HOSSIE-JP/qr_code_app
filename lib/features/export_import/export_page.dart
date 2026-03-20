@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:auto_route/auto_route.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
@@ -151,10 +155,27 @@ class _ExportPageState extends ConsumerState<ExportPage> {
 
       if (!mounted) return;
 
-      // Share the file
-      await SharePlus.instance.share(
-        ShareParams(files: [XFile(filePath)], text: 'QR Code Manager エクスポート'),
-      );
+      if (!kIsWeb && Platform.isWindows) {
+        final savePath = await FilePicker.platform.saveFile(
+          dialogTitle: '保存先を選択してください',
+          fileName: filePath.split(Platform.pathSeparator).last,
+          type: FileType.custom,
+          allowedExtensions: [format == 'zip' ? 'qrdb' : 'qrjson'],
+        );
+        if (savePath == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('エクスポートをキャンセルしました')));
+          return;
+        }
+        await File(filePath).copy(savePath);
+      } else {
+        // モバイル等では既存どおり共有シートを利用する。
+        await SharePlus.instance.share(
+          ShareParams(files: [XFile(filePath)], text: 'QR Code Manager エクスポート'),
+        );
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(

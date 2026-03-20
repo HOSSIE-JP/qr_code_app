@@ -138,6 +138,21 @@ class QrRepository {
     return _db.categoryDao.updateSortOrders(databaseId, orderedIds);
   }
 
+  /// 指定データベースのカテゴリ一覧を表示順で取得する。
+  Future<List<CategoryModel>> getCategoriesByDatabase(String databaseId) async {
+    final rows = await _db.categoryDao.getCategoriesByDatabase(databaseId);
+    return rows
+        .map(
+          (row) => CategoryModel(
+            id: row.id,
+            databaseId: row.databaseId,
+            name: row.name,
+            sortOrder: row.sortOrder,
+          ),
+        )
+        .toList();
+  }
+
   // --- エントリ ---
 
   /// 全エントリを取得する。[databaseId] 指定時はそのDBのみ。タグ情報も同時に読み込む。
@@ -168,6 +183,16 @@ class QrRepository {
   /// 指定 ID のエントリを取得する。見つからない場合は null。
   Future<QrEntryModel?> getEntryById(String id) async {
     final entry = await _db.qrEntryDao.getEntryById(id);
+    if (entry == null) return null;
+    return _toModel(entry);
+  }
+
+  /// 指定データベース内で名称が一致するエントリを取得する。
+  Future<QrEntryModel?> getEntryByName({
+    required String databaseId,
+    required String name,
+  }) async {
+    final entry = await _db.qrEntryDao.getEntryByNameInDatabase(databaseId, name);
     if (entry == null) return null;
     return _toModel(entry);
   }
@@ -249,6 +274,40 @@ class QrRepository {
     if (tagIds != null) {
       await _db.qrEntryDao.setTagsForEntry(id, tagIds);
     }
+  }
+
+  /// インポート時に既存エントリを完全更新する。
+  ///
+  /// 名称一致で上書きするユースケース向けに、QR データやサムネイル、
+  /// カテゴリ、タグをまとめて置き換える。
+  Future<void> overwriteEntryFromImport({
+    required String id,
+    required String name,
+    required String description,
+    required Uint8List data,
+    required int chunkCount,
+    required bool isTextMode,
+    required bool isFavorite,
+    required Uint8List? thumbnail,
+    required String? categoryId,
+    required List<String> tagIds,
+  }) async {
+    await _db.qrEntryDao.updateEntry(
+      QrEntriesCompanion(
+        id: Value(id),
+        name: Value(name),
+        description: Value(description),
+        originalData: Value(data),
+        dataSize: Value(data.length),
+        chunkCount: Value(chunkCount),
+        isTextMode: Value(isTextMode),
+        isFavorite: Value(isFavorite),
+        thumbnail: Value(thumbnail),
+        categoryId: Value(categoryId),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+    await _db.qrEntryDao.setTagsForEntry(id, tagIds);
   }
 
   /// エントリの QR コードデータを更新する。

@@ -77,6 +77,12 @@ class QrEntryDao extends DatabaseAccessor<AppDatabase> with _$QrEntryDaoMixin {
   Future<QrEntry?> getEntryById(String id) =>
       (select(qrEntries)..where((t) => t.id.equals(id))).getSingleOrNull();
 
+  /// 指定データベース内で名称が一致するエントリを取得する。
+  Future<QrEntry?> getEntryByNameInDatabase(String databaseId, String name) =>
+      (select(qrEntries)
+            ..where((t) => t.databaseId.equals(databaseId) & t.name.equals(name)))
+          .getSingleOrNull();
+
   /// 指定データサイズに一致するエントリ一覧を返す（重複検出の前段フィルタ用）。
   Future<List<QrEntry>> getEntriesByDataSize(int size) =>
       (select(qrEntries)..where((t) => t.dataSize.equals(size))).get();
@@ -175,41 +181,56 @@ class QrEntryDao extends DatabaseAccessor<AppDatabase> with _$QrEntryDaoMixin {
     String? databaseId,
     bool? hasQrData,
   }) async {
-    if (tagIds.isEmpty &&
-        (textQuery == null || textQuery.isEmpty) &&
-        databaseId == null &&
-        hasQrData == null) {
-      return getAllEntries();
-    }
+    // タグ指定がない場合は、テキスト有無で検索経路を切り替える。
+    if (tagIds.isEmpty) {
+      // テキスト検索がある場合はタグ名検索も含めるため JOIN する。
+      if (textQuery != null && textQuery.isNotEmpty) {
+        final pattern = '%$textQuery%';
+        final q = select(qrEntries).join([
+          leftOuterJoin(entryTags, entryTags.entryId.equalsExp(qrEntries.id)),
+          leftOuterJoin(tags, tags.id.equalsExp(entryTags.tagId)),
+        ]);
 
-    // テキスト検索がありタグなしの場合、タグ名検索も含める
-    if (tagIds.isEmpty && textQuery != null && textQuery.isNotEmpty) {
-      final pattern = '%$textQuery%';
-      final q = select(qrEntries).join([
-        leftOuterJoin(entryTags, entryTags.entryId.equalsExp(qrEntries.id)),
-        leftOuterJoin(tags, tags.id.equalsExp(entryTags.tagId)),
-      ]);
+        Expression<bool> condition =
+            qrEntries.name.like(pattern) |
+            qrEntries.description.like(pattern) |
+            tags.name.like(pattern);
 
-      Expression<bool> condition =
-          qrEntries.name.like(pattern) |
-          qrEntries.description.like(pattern) |
-          tags.name.like(pattern);
+        if (databaseId != null) {
+          condition = condition & qrEntries.databaseId.equals(databaseId);
+        }
+        if (hasQrData == true) {
+          condition = condition & qrEntries.dataSize.isBiggerThanValue(0);
+        } else if (hasQrData == false) {
+          condition = condition & qrEntries.dataSize.equals(0);
+        }
 
+        q
+          ..where(condition)
+          ..groupBy([qrEntries.id])
+          ..orderBy([OrderingTerm.desc(qrEntries.updatedAt)]);
+
+        return q.map((r) => r.readTable(qrEntries)).get();
+      }
+
+      // テキスト検索がない場合は単純な一覧/フィルタとして扱う。
+      final query = select(qrEntries);
+      Expression<bool>? condition;
       if (databaseId != null) {
-        condition = condition & qrEntries.databaseId.equals(databaseId);
+        condition = qrEntries.databaseId.equals(databaseId);
       }
       if (hasQrData == true) {
-        condition = condition & qrEntries.dataSize.isBiggerThanValue(0);
+        final c = qrEntries.dataSize.isBiggerThanValue(0);
+        condition = condition == null ? c : condition & c;
       } else if (hasQrData == false) {
-        condition = condition & qrEntries.dataSize.equals(0);
+        final c = qrEntries.dataSize.equals(0);
+        condition = condition == null ? c : condition & c;
       }
-
-      q
-        ..where(condition)
-        ..groupBy([qrEntries.id])
-        ..orderBy([OrderingTerm.desc(qrEntries.updatedAt)]);
-
-      return q.map((r) => r.readTable(qrEntries)).get();
+      if (condition != null) {
+        query.where((_) => condition!);
+      }
+      query.orderBy([(t) => OrderingTerm.desc(t.updatedAt)]);
+      return query.get();
     }
 
     // タグありの場合

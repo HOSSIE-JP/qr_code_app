@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_code_app/data/database/app_database.dart';
@@ -27,6 +29,10 @@ void main() {
 
     test('日本語テキストとタグ情報を別DBへ正しくインポートできる', () async {
       final database = await qrRepository.createDatabase(name: '検証DB');
+      final category = await qrRepository.createCategory(
+        name: '業務',
+        databaseId: database.id,
+      );
 
       final payload = <String, dynamic>{
         'version': 1,
@@ -34,10 +40,14 @@ void main() {
         'tags': [
           {'id': 'old-tag-1', 'name': '重要', 'color': 0xFF123456},
         ],
+        'categories': [
+          {'id': 'old-category-1', 'name': category.name, 'sortOrder': 0},
+        ],
         'entries': [
           {
             'id': 'entry-1',
             'databaseId': 'default',
+            'categoryId': 'old-category-1',
             'name': 'タイトル日本語',
             'description': '説明メモ日本語',
             'originalData': utf8.encode('テキスト本文'),
@@ -65,6 +75,7 @@ void main() {
       expect(entries, hasLength(1));
       expect(entries.single.name, 'タイトル日本語');
       expect(entries.single.description, '説明メモ日本語');
+      expect(entries.single.categoryId, category.id);
       expect(entries.single.tags, hasLength(1));
       expect(entries.single.tags.single.name, '重要');
       expect(entries.single.tags.single.databaseId, database.id);
@@ -72,6 +83,138 @@ void main() {
       final tags = await tagRepository.getAllTags(databaseId: database.id);
       expect(tags, hasLength(1));
       expect(tags.single.name, '重要');
+    });
+
+    test('同名エントリを再インポートすると新規作成せず更新する', () async {
+      final database = await qrRepository.createDatabase(name: '更新検証DB');
+      final existing = await qrRepository.createEntry(
+        name: '同名データ',
+        description: '旧説明',
+        data: Uint8List.fromList(utf8.encode('old')),
+        chunkCount: 1,
+        isTextMode: true,
+        databaseId: database.id,
+      );
+
+      final payload = <String, dynamic>{
+        'version': 2,
+        'exportedAt': DateTime.now().toIso8601String(),
+        'tags': [
+          {'id': 'old-tag-1', 'name': '更新タグ', 'color': 0xFF654321},
+        ],
+        'categories': [
+          {'id': 'old-category-1', 'name': '更新カテゴリ', 'sortOrder': 0},
+        ],
+        'entries': [
+          {
+            'id': 'entry-ignored',
+            'databaseId': 'default',
+            'categoryId': 'old-category-1',
+            'name': '同名データ',
+            'description': '新説明',
+            'originalData': utf8.encode('new-data'),
+            'dataSize': utf8.encode('new-data').length,
+            'chunkCount': 1,
+            'isTextMode': true,
+            'isFavorite': true,
+            'thumbnail': [1, 2, 3],
+            'createdAt': DateTime.now().toIso8601String(),
+            'updatedAt': DateTime.now().toIso8601String(),
+            'tags': ['old-tag-1'],
+          },
+        ],
+      };
+
+      final importedCount = await exportRepository.importFromJson(
+        jsonEncode(payload),
+        databaseId: database.id,
+      );
+
+      expect(importedCount, 1);
+      final entries = await qrRepository.getAllEntries(databaseId: database.id);
+      expect(entries, hasLength(1));
+      expect(entries.single.id, existing.id);
+      expect(entries.single.description, '新説明');
+      expect(utf8.decode(entries.single.originalData), 'new-data');
+      expect(entries.single.isFavorite, isTrue);
+      expect(entries.single.tags.map((tag) => tag.name), ['更新タグ']);
+
+      final categories = await qrRepository.getCategoriesByDatabase(database.id);
+      expect(categories, hasLength(1));
+      expect(entries.single.categoryId, categories.single.id);
+    });
+
+    test('ZIPインポートは他DBの同一ID既存データに影響されず取り込める', () async {
+      final targetDatabase = await qrRepository.createDatabase(name: 'ZIP取込先');
+
+      final existingDefault = await qrRepository.createEntry(
+        name: '既存デフォルト',
+        description: 'default',
+        data: Uint8List.fromList([9, 9, 9]),
+        chunkCount: 1,
+        databaseId: 'default',
+      );
+
+      final archive = Archive();
+      archive.addFile(
+        ArchiveFile.bytes(
+          'categories.json',
+          utf8.encode(
+            jsonEncode([
+              {'id': 'old-category', 'name': 'ZIPカテゴリ', 'sortOrder': 0},
+            ]),
+          ),
+        ),
+      );
+      archive.addFile(
+        ArchiveFile.bytes(
+          'tags.json',
+          utf8.encode(
+            jsonEncode([
+              {'id': 'old-tag', 'name': 'ZIPタグ', 'color': 0xFF010203},
+            ]),
+          ),
+        ),
+      );
+      archive.addFile(
+        ArchiveFile.bytes(
+          'entries.json',
+          utf8.encode(
+            jsonEncode([
+              {
+                'id': existingDefault.id,
+                'name': 'ZIP取込エントリ',
+                'description': 'zip説明',
+                'chunkCount': 1,
+                'isTextMode': false,
+                'isFavorite': false,
+                'categoryId': 'old-category',
+                'tags': ['old-tag'],
+              },
+            ]),
+          ),
+        ),
+      );
+      archive.addFile(
+        ArchiveFile.bytes('data/${existingDefault.id}.bin', [1, 2, 3, 4]),
+      );
+      archive.addFile(
+        ArchiveFile.bytes('thumbnails/${existingDefault.id}.png', [8, 8, 8]),
+      );
+
+      final zipBytes = ZipEncoder().encode(archive);
+      final importedCount = await exportRepository.importFromZip(
+        Uint8List.fromList(zipBytes),
+        databaseId: targetDatabase.id,
+      );
+
+      expect(importedCount, 1);
+      final targetEntries = await qrRepository.getAllEntries(
+        databaseId: targetDatabase.id,
+      );
+      expect(targetEntries, hasLength(1));
+      expect(targetEntries.single.name, 'ZIP取込エントリ');
+      expect(targetEntries.single.thumbnail, isNotNull);
     });
   });
 }

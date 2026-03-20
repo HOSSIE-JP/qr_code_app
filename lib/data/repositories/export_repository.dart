@@ -33,16 +33,19 @@ class ExportRepository {
           ).then((list) => list.whereType<QrEntryModel>().toList())
         : await _qrRepo.getAllEntries(databaseId: databaseId);
 
-    final tags = await _tagRepo.getAllTags(databaseId: databaseId);
+    final targetDatabaseId = databaseId ?? 'default';
+    final tags = await _tagRepo.getAllTags(databaseId: targetDatabaseId);
+    final categories = await _qrRepo.getCategoriesByDatabase(targetDatabaseId);
 
     final archive = Archive();
 
     // Add metadata JSON
     final metadata = {
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
       'entryCount': entries.length,
       'tagCount': tags.length,
+      'categoryCount': categories.length,
     };
     archive.addFile(
       ArchiveFile.bytes('metadata.json', utf8.encode(jsonEncode(metadata))),
@@ -52,6 +55,15 @@ class ExportRepository {
     final tagsJson = tags.map((t) => t.toJson()).toList();
     archive.addFile(
       ArchiveFile.bytes('tags.json', utf8.encode(jsonEncode(tagsJson))),
+    );
+
+    // Add categories JSON
+    final categoriesJson = categories.map((c) => c.toJson()).toList();
+    archive.addFile(
+      ArchiveFile.bytes(
+        'categories.json',
+        utf8.encode(jsonEncode(categoriesJson)),
+      ),
     );
 
     // Add entries
@@ -101,12 +113,15 @@ class ExportRepository {
           ).then((list) => list.whereType<QrEntryModel>().toList())
         : await _qrRepo.getAllEntries(databaseId: databaseId);
 
-    final tags = await _tagRepo.getAllTags(databaseId: databaseId);
+    final targetDatabaseId = databaseId ?? 'default';
+    final tags = await _tagRepo.getAllTags(databaseId: targetDatabaseId);
+    final categories = await _qrRepo.getCategoriesByDatabase(targetDatabaseId);
 
     final exportData = {
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
       'tags': tags.map((t) => t.toJson()).toList(),
+      'categories': categories.map((c) => c.toJson()).toList(),
       'entries': entries.map((e) => e.toJson()).toList(),
     };
 
@@ -125,6 +140,25 @@ class ExportRepository {
     final archive = ZipDecoder().decodeBytes(zipBytes);
     var importedCount = 0;
     final targetDatabaseId = databaseId ?? 'default';
+
+    // Read categories
+    final categoryIdMap = <String, String>{};
+    final categoriesFile = archive.findFile('categories.json');
+    if (categoriesFile != null) {
+      final categoriesJson =
+          jsonDecode(utf8.decode(categoriesFile.content as List<int>)) as List;
+      for (final categoryJson in categoriesJson) {
+        final map = (categoryJson as Map).cast<String, dynamic>();
+        final oldCategoryId = map['id'] as String?;
+        final created = await _upsertCategory(
+          name: map['name'] as String,
+          databaseId: targetDatabaseId,
+        );
+        if (oldCategoryId != null && oldCategoryId.isNotEmpty) {
+          categoryIdMap[oldCategoryId] = created.id;
+        }
+      }
+    }
 
     // Read tags
     final tagIdMap = <String, String>{};
@@ -154,11 +188,13 @@ class ExportRepository {
         jsonDecode(utf8.decode(entriesFile.content as List<int>)) as List;
 
     for (final entryJson in entriesJson) {
-      final id = entryJson['id'] as String;
+      final map = (entryJson as Map).cast<String, dynamic>();
+      final id = map['id'] as String;
 
-      // Check if already exists
-      final existing = await _qrRepo.getEntryById(id);
-      if (existing != null) continue;
+      final existing = await _qrRepo.getEntryByName(
+        databaseId: targetDatabaseId,
+        name: map['name'] as String,
+      );
 
       // Get binary data
       final dataFile = archive.findFile('data/$id.bin');
@@ -166,24 +202,49 @@ class ExportRepository {
 
       final thumbnailFile = archive.findFile('thumbnails/$id.png');
 
-      final originalTagIds = _extractTagIds(entryJson['tags']);
+      final originalTagIds = _extractTagIds(map['tags']);
       final tagIds = originalTagIds
           .map((id) => tagIdMap[id] ?? id)
           .toList(growable: false);
 
-      await _qrRepo.createEntry(
-        name: entryJson['name'] as String,
-        description: (entryJson['description'] as String?) ?? '',
-        data: Uint8List.fromList(dataFile.content as List<int>),
-        chunkCount: (entryJson['chunkCount'] as int?) ?? 1,
-        isTextMode: (entryJson['isTextMode'] as bool?) ?? false,
-        isFavorite: (entryJson['isFavorite'] as bool?) ?? false,
-        thumbnail: thumbnailFile != null
-            ? Uint8List.fromList(thumbnailFile.content as List<int>)
-            : null,
-        tagIds: tagIds,
-        databaseId: targetDatabaseId,
+      final resolvedCategoryId = _resolveCategoryId(
+        rawCategoryId: map['categoryId'],
+        categoryIdMap: categoryIdMap,
       );
+
+      final importDescription = (map['description'] as String?) ?? '';
+      final importData = Uint8List.fromList(dataFile.content as List<int>);
+      final importThumbnail = thumbnailFile != null
+          ? Uint8List.fromList(thumbnailFile.content as List<int>)
+          : null;
+
+      if (existing == null) {
+        await _qrRepo.createEntry(
+          name: map['name'] as String,
+          description: importDescription,
+          data: importData,
+          chunkCount: (map['chunkCount'] as int?) ?? 1,
+          isTextMode: (map['isTextMode'] as bool?) ?? false,
+          isFavorite: (map['isFavorite'] as bool?) ?? false,
+          thumbnail: importThumbnail,
+          tagIds: tagIds,
+          databaseId: targetDatabaseId,
+          categoryId: resolvedCategoryId,
+        );
+      } else {
+        await _qrRepo.overwriteEntryFromImport(
+          id: existing.id,
+          name: map['name'] as String,
+          description: importDescription,
+          data: importData,
+          chunkCount: (map['chunkCount'] as int?) ?? 1,
+          isTextMode: (map['isTextMode'] as bool?) ?? false,
+          isFavorite: (map['isFavorite'] as bool?) ?? false,
+          thumbnail: importThumbnail,
+          categoryId: resolvedCategoryId,
+          tagIds: tagIds,
+        );
+      }
 
       importedCount++;
     }
@@ -198,6 +259,21 @@ class ExportRepository {
     final data = jsonDecode(jsonString) as Map<String, dynamic>;
     var importedCount = 0;
     final targetDatabaseId = databaseId ?? 'default';
+
+    // Import categories
+    final categoryIdMap = <String, String>{};
+    final categoriesJson = data['categories'] as List? ?? [];
+    for (final categoryJson in categoriesJson) {
+      final map = (categoryJson as Map).cast<String, dynamic>();
+      final oldCategoryId = map['id'] as String?;
+      final created = await _upsertCategory(
+        name: map['name'] as String,
+        databaseId: targetDatabaseId,
+      );
+      if (oldCategoryId != null && oldCategoryId.isNotEmpty) {
+        categoryIdMap[oldCategoryId] = created.id;
+      }
+    }
 
     // Import tags
     final tagIdMap = <String, String>{};
@@ -218,32 +294,59 @@ class ExportRepository {
     // Import entries
     final entriesJson = data['entries'] as List? ?? [];
     for (final entryJson in entriesJson) {
-      final id = entryJson['id'] as String;
-      final existing = await _qrRepo.getEntryById(id);
-      if (existing != null) continue;
+      final map = (entryJson as Map).cast<String, dynamic>();
+      final existing = await _qrRepo.getEntryByName(
+        databaseId: targetDatabaseId,
+        name: map['name'] as String,
+      );
 
-      final originalData = entryJson['originalData'] as List?;
+      final originalData = map['originalData'] as List?;
       if (originalData == null) continue;
 
-      final thumbnailData = entryJson['thumbnail'] as List?;
-      final originalTagIds = _extractTagIds(entryJson['tags']);
+      final thumbnailData = map['thumbnail'] as List?;
+      final originalTagIds = _extractTagIds(map['tags']);
       final tagIds = originalTagIds
           .map((id) => tagIdMap[id] ?? id)
           .toList(growable: false);
 
-      await _qrRepo.createEntry(
-        name: entryJson['name'] as String,
-        description: (entryJson['description'] as String?) ?? '',
-        data: Uint8List.fromList(originalData.cast<int>()),
-        chunkCount: (entryJson['chunkCount'] as int?) ?? 1,
-        isTextMode: (entryJson['isTextMode'] as bool?) ?? false,
-        isFavorite: (entryJson['isFavorite'] as bool?) ?? false,
-        thumbnail: thumbnailData != null
-            ? Uint8List.fromList(thumbnailData.cast<int>())
-            : null,
-        tagIds: tagIds,
-        databaseId: targetDatabaseId,
+      final resolvedCategoryId = _resolveCategoryId(
+        rawCategoryId: map['categoryId'],
+        categoryIdMap: categoryIdMap,
       );
+
+      final importDescription = (map['description'] as String?) ?? '';
+      final importData = Uint8List.fromList(originalData.cast<int>());
+      final importThumbnail = thumbnailData != null
+          ? Uint8List.fromList(thumbnailData.cast<int>())
+          : null;
+
+      if (existing == null) {
+        await _qrRepo.createEntry(
+          name: map['name'] as String,
+          description: importDescription,
+          data: importData,
+          chunkCount: (map['chunkCount'] as int?) ?? 1,
+          isTextMode: (map['isTextMode'] as bool?) ?? false,
+          isFavorite: (map['isFavorite'] as bool?) ?? false,
+          thumbnail: importThumbnail,
+          tagIds: tagIds,
+          databaseId: targetDatabaseId,
+          categoryId: resolvedCategoryId,
+        );
+      } else {
+        await _qrRepo.overwriteEntryFromImport(
+          id: existing.id,
+          name: map['name'] as String,
+          description: importDescription,
+          data: importData,
+          chunkCount: (map['chunkCount'] as int?) ?? 1,
+          isTextMode: (map['isTextMode'] as bool?) ?? false,
+          isFavorite: (map['isFavorite'] as bool?) ?? false,
+          thumbnail: importThumbnail,
+          categoryId: resolvedCategoryId,
+          tagIds: tagIds,
+        );
+      }
 
       importedCount++;
     }
@@ -269,5 +372,30 @@ class ExportRepository {
         .whereType<String>()
         .where((id) => id.isNotEmpty)
         .toList(growable: false);
+  }
+
+  /// カテゴリIDを旧ID→新IDマップで解決する。
+  String? _resolveCategoryId({
+    required dynamic rawCategoryId,
+    required Map<String, String> categoryIdMap,
+  }) {
+    if (rawCategoryId is! String || rawCategoryId.isEmpty) {
+      return null;
+    }
+    return categoryIdMap[rawCategoryId] ?? rawCategoryId;
+  }
+
+  /// カテゴリ名で重複を避けてカテゴリを取得または作成する。
+  Future<CategoryModel> _upsertCategory({
+    required String name,
+    required String databaseId,
+  }) async {
+    final categories = await _qrRepo.getCategoriesByDatabase(databaseId);
+    for (final category in categories) {
+      if (category.name == name) {
+        return category;
+      }
+    }
+    return _qrRepo.createCategory(name: name, databaseId: databaseId);
   }
 }

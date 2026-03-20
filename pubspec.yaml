@@ -1,7 +1,7 @@
 name: qr_code_app
 description: "プリQR - QRコードを生成・読み取り・管理するクロスプラットフォームアプリ。"
 publish_to: 'none'
-version: 1.1.0+1
+version: 1.1.1+1
 
 environment:
   sdk: ^3.11.3
