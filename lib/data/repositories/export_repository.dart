@@ -124,17 +124,25 @@ class ExportRepository {
   Future<int> importFromZip(Uint8List zipBytes, {String? databaseId}) async {
     final archive = ZipDecoder().decodeBytes(zipBytes);
     var importedCount = 0;
+    final targetDatabaseId = databaseId ?? 'default';
 
     // Read tags
+    final tagIdMap = <String, String>{};
     final tagsFile = archive.findFile('tags.json');
     if (tagsFile != null) {
       final tagsJson =
           jsonDecode(utf8.decode(tagsFile.content as List<int>)) as List;
       for (final tagJson in tagsJson) {
-        await _tagRepo.createTag(
-          name: tagJson['name'] as String,
-          color: tagJson['color'] as int?,
+        final map = (tagJson as Map).cast<String, dynamic>();
+        final oldTagId = map['id'] as String?;
+        final created = await _tagRepo.createTag(
+          name: map['name'] as String,
+          color: map['color'] as int?,
+          databaseId: targetDatabaseId,
         );
+        if (oldTagId != null && oldTagId.isNotEmpty) {
+          tagIdMap[oldTagId] = created.id;
+        }
       }
     }
 
@@ -158,11 +166,10 @@ class ExportRepository {
 
       final thumbnailFile = archive.findFile('thumbnails/$id.png');
 
-      final tagIds =
-          (entryJson['tags'] as List?)
-              ?.map((t) => t['id'] as String)
-              .toList() ??
-          [];
+      final originalTagIds = _extractTagIds(entryJson['tags']);
+      final tagIds = originalTagIds
+          .map((id) => tagIdMap[id] ?? id)
+          .toList(growable: false);
 
       await _qrRepo.createEntry(
         name: entryJson['name'] as String,
@@ -175,7 +182,7 @@ class ExportRepository {
             ? Uint8List.fromList(thumbnailFile.content as List<int>)
             : null,
         tagIds: tagIds,
-        databaseId: databaseId ?? 'default',
+        databaseId: targetDatabaseId,
       );
 
       importedCount++;
@@ -190,14 +197,22 @@ class ExportRepository {
   Future<int> importFromJson(String jsonString, {String? databaseId}) async {
     final data = jsonDecode(jsonString) as Map<String, dynamic>;
     var importedCount = 0;
+    final targetDatabaseId = databaseId ?? 'default';
 
     // Import tags
+    final tagIdMap = <String, String>{};
     final tagsJson = data['tags'] as List? ?? [];
     for (final tagJson in tagsJson) {
-      await _tagRepo.createTag(
+      final map = (tagJson as Map).cast<String, dynamic>();
+      final oldTagId = map['id'] as String?;
+      final created = await _tagRepo.createTag(
         name: tagJson['name'] as String,
         color: tagJson['color'] as int?,
+        databaseId: targetDatabaseId,
       );
+      if (oldTagId != null && oldTagId.isNotEmpty) {
+        tagIdMap[oldTagId] = created.id;
+      }
     }
 
     // Import entries
@@ -211,11 +226,10 @@ class ExportRepository {
       if (originalData == null) continue;
 
       final thumbnailData = entryJson['thumbnail'] as List?;
-      final tagIds =
-          (entryJson['tags'] as List?)
-              ?.map((t) => t['id'] as String)
-              .toList() ??
-          [];
+      final originalTagIds = _extractTagIds(entryJson['tags']);
+      final tagIds = originalTagIds
+          .map((id) => tagIdMap[id] ?? id)
+          .toList(growable: false);
 
       await _qrRepo.createEntry(
         name: entryJson['name'] as String,
@@ -228,12 +242,32 @@ class ExportRepository {
             ? Uint8List.fromList(thumbnailData.cast<int>())
             : null,
         tagIds: tagIds,
-        databaseId: databaseId ?? 'default',
+        databaseId: targetDatabaseId,
       );
 
       importedCount++;
     }
 
     return importedCount;
+  }
+
+  /// JSON 内の tags フィールドからタグID一覧を抽出する。
+  ///
+  /// 旧形式（[{id: ...}]) と新形式（['id1', 'id2']）の双方を受け付ける。
+  List<String> _extractTagIds(dynamic rawTags) {
+    if (rawTags is! List) {
+      return const <String>[];
+    }
+    return rawTags
+        .map<String?>((tag) {
+          if (tag is String) return tag;
+          if (tag is Map && tag['id'] is String) {
+            return tag['id'] as String;
+          }
+          return null;
+        })
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toList(growable: false);
   }
 }

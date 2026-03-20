@@ -152,7 +152,7 @@ The FocusNode sending notification was: FocusNode#283cf
 ════════ Exception caught by widgets library ═══════════════════════════════════
 A TextEditingController was used after being disposed.
 The relevant error-causing widget was:
-    TextField TextField:file:///Users/hossie/development/qr_code_app/lib/features/settings/settings_page.dart:182:18
+    TextField TextField:file:///Users/development/qr_code_app/lib/features/settings/settings_page.dart:182:18
 ════════════════════════════════════════════════════════════════════════════════
 I/ImeTracker(20094): com.example.qr_code_app:762b5d76: onRequestHide at ORIGIN_CLIENT reason HIDE_SOFT_INPUT fromUser false userId 0 displayId 0
 D/InsetsController(20094): hide(ime())
@@ -165,7 +165,7 @@ D/FlutterJNI(20094): Sending viewport metrics to the engine.
 ════════ Exception caught by widgets library ═══════════════════════════════════
 'package:flutter/src/widgets/framework.dart': Failed assertion: line 6268 pos 12: '_dependents.isEmpty': is not true.
 The relevant error-causing widget was:
-    MaterialApp MaterialApp:file:///Users/hossie/development/qr_code_app/lib/app.dart:23:24
+    MaterialApp MaterialApp:file:///Users/development/qr_code_app/lib/app.dart:23:24
 ════════════════════════════════════════════════════════════════════════════════
 
 ════════ Exception caught by scheduler library ═════════════════════════════════
@@ -218,3 +218,24 @@ W/RemoteInputConnectionImpl(20094): requestCursorUpdates on inactive InputConnec
 - QRデータ詳細画面でサムネイルをクリックして全体表示する際、ヒーローアニメーションで遷移するように修正してください。
 
 - アプリのパッケージ名、これはおそらくAndroidのみだと思われますがデフォルトの com.exampleとなっていますがこれを jp.co.geronekoとなるように修正してください。
+
+- アプリからExportしたデータを、再度Importするとタイトルと説明のテキストが文字化けしてしまいます。修正してください。
+- アプリ内でタグの情報がデフォルトのデータベースのみに紐づいているようで、新規に作ったデータベースに対してタグが反映されない不具合があります。修正してください。
+    - Export／Importしたときにタグ情報がきちんと引き継げているか確認してください。
+- アプリでQRをスキャンし保存情報を編集する際に、同時にサムネイル登録もできるように修正してください。UXが悪すぎます。
+- QRコードのメタデータ情報ですがすべて `テキスト`になっています。基本的にテキストかバイナリかを自動判定し設定してください。また登録・編集時にユーザーが設定できるようにしてください。
+- QRコード詳細表示時に、`テキスト`形式のデータの場合はテキストデータを説明・メモに自動的に反映するようにしてください。一方でバイナリデータの場合はクリップボードにコピーできるようにしてください。
+- DBエディタ自体で新規エントリの追加やタグの編集ができないので機能を追加してください。
+- MacOSのDBエディタで以下の問題があるので修正してください。
+    - Excelひな形ファイルを保存しようとしたらPermissionのエラーのようなものが出て保存できませんでした。
+    - 保存形式が選べないようです。Excelやアプリのjsonと相互運用ができないです。
+
+よい修正です。次に以下をやってください。
+- アプリでQRをスキャンし保存情報を編集する際に、同時にタグの設定・登録もできるようにしてください。
+- QRコードが登録されていないデータについて、サムネイルをグレースケールにして表示するようにしてください。
+- DBエディタでカテゴリー編集ができません。できるようにしてください。カテゴリやタグを編集する専用のページ（タブ切替）を作るとよいと思います。
+- DBエディタで新規エントリ追加はできるようになりましたが、既存エントリの削除ができません。できるようにしてください。
+- DBエディタの詳細プレビューが情報過多です。「お気に入り」「テキストモード」のチェックON/OFFはリスト上でできるようにして詳細プレビューから外してください。
+- MacOSのDBエディタで雛形ファイルの保存時に出るエラーが解消していません。エラーのスクリーンショットを添付したので確認し対応してください。
+
+以上がすべて修正できたら、バージョン1.1.0としてリリースしようと思いますので、バージョン書き換えとリリースノートを作成してください。

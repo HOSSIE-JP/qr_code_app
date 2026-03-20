@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -113,6 +114,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     ColorScheme colorScheme,
   ) {
     final dataText = _decodeData(entry.originalData);
+    final effectiveDescription = entry.description.isNotEmpty
+        ? entry.description
+        : (entry.isTextMode ? dataText : '');
     final url = _extractUrl(dataText);
     final qrConfig = ref.watch(qrGenerationSettingsProvider);
 
@@ -208,11 +212,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                               ),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(16),
-                                child: Image.memory(
-                                  entry.thumbnail!,
-                                  fit: BoxFit.contain,
-                                  width: double.infinity,
-                                ),
+                                child: _buildDetailThumbnail(entry),
                               ),
                             ),
                           ),
@@ -248,9 +248,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _infoRow(theme, '名称', entry.name),
-                            if (entry.description.isNotEmpty) ...[
+                            if (effectiveDescription.isNotEmpty) ...[
                               const Divider(),
-                              _infoRow(theme, '説明', entry.description),
+                              _infoRow(theme, '説明', effectiveDescription),
                             ],
                             const SizedBox(height: 8),
                             ExpansionTile(
@@ -301,6 +301,16 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                       Text('タグ', style: theme.textTheme.titleSmall),
                       const SizedBox(height: 8),
                       TagChips(tags: entry.tags),
+                    ],
+
+                    if (entry.hasQrData && !entry.isTextMode) ...[
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: () =>
+                            _copyBinaryData(context, entry.originalData),
+                        icon: const Icon(Icons.content_copy),
+                        label: const Text('バイナリデータをコピー'),
+                      ),
                     ],
                   ],
                 ),
@@ -541,6 +551,16 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     }
   }
 
+  /// バイナリデータを Base64 文字列にしてクリップボードへコピーする。
+  Future<void> _copyBinaryData(BuildContext context, List<int> bytes) async {
+    final base64 = base64Encode(bytes);
+    await Clipboard.setData(ClipboardData(text: base64));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('バイナリデータをコピーしました')));
+  }
+
   Widget _infoRow(ThemeData theme, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -574,6 +594,45 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         '${date.day.toString().padLeft(2, '0')} '
         '${date.hour.toString().padLeft(2, '0')}:'
         '${date.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// 詳細画面のサムネイル表示を構築する。
+  ///
+  /// QR未登録の場合はグレースケールで表示して状態を視覚的に区別する。
+  Widget _buildDetailThumbnail(QrEntryModel entry) {
+    final image = Image.memory(
+      entry.thumbnail!,
+      fit: BoxFit.contain,
+      width: double.infinity,
+    );
+    if (entry.hasQrData) {
+      return image;
+    }
+    return ColorFiltered(
+      colorFilter: const ColorFilter.matrix(<double>[
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+      ]),
+      child: Opacity(opacity: 0.6, child: image),
+    );
   }
 }
 

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../core/utils/qr_data_type_utils.dart';
 import '../../data/models/qr_entry_model.dart';
 import '../../providers/providers.dart';
 import '../../router/app_router.dart';
@@ -36,6 +37,7 @@ class _EditPageState extends ConsumerState<EditPage> {
   List<String> _selectedTagIds = [];
   String? _selectedCategoryId;
   Uint8List? _thumbnail;
+  bool _isTextMode = false;
   bool _isFavorite = false;
   bool _initialized = false;
   bool _saving = false;
@@ -55,6 +57,7 @@ class _EditPageState extends ConsumerState<EditPage> {
     _selectedTagIds = entry.tags.map((t) => t.id).toList();
     _selectedCategoryId = entry.categoryId;
     _thumbnail = entry.thumbnail;
+    _isTextMode = entry.isTextMode;
     _isFavorite = entry.isFavorite;
     _initialized = true;
   }
@@ -218,6 +221,25 @@ class _EditPageState extends ConsumerState<EditPage> {
                 // QR データセクション
                 Text('QR データ', style: theme.textTheme.titleSmall),
                 const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(
+                      value: true,
+                      icon: Icon(Icons.text_fields),
+                      label: Text('テキスト'),
+                    ),
+                    ButtonSegment<bool>(
+                      value: false,
+                      icon: Icon(Icons.data_array),
+                      label: Text('バイナリ'),
+                    ),
+                  ],
+                  selected: <bool>{_isTextMode},
+                  onSelectionChanged: (values) {
+                    setState(() => _isTextMode = values.first);
+                  },
+                ),
+                const SizedBox(height: 8),
                 _buildQrDataSection(entry, theme),
               ],
             ),
@@ -351,10 +373,19 @@ class _EditPageState extends ConsumerState<EditPage> {
 
     if (scannedData == null || !mounted) return;
 
+    final detectedTextMode = QrDataTypeUtils.inferIsTextMode(scannedData);
+    final selectedTextMode = await _askDataType(initialValue: detectedTextMode);
+    if (selectedTextMode == null || !mounted) return;
+
     try {
       await ref
           .read(qrRepositoryProvider)
-          .updateQrData(id: entry.id, data: scannedData, isTextMode: true);
+          .updateQrData(
+            id: entry.id,
+            data: scannedData,
+            isTextMode: selectedTextMode,
+          );
+      setState(() => _isTextMode = selectedTextMode);
       ref.invalidate(qrEntryByIdProvider(widget.entryId));
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -518,7 +549,8 @@ class _EditPageState extends ConsumerState<EditPage> {
     if (name.isEmpty) return;
 
     final tagRepo = ref.read(tagRepositoryProvider);
-    final tag = await tagRepo.createTag(name: name);
+    final dbId = ref.read(currentDatabaseIdProvider);
+    final tag = await tagRepo.createTag(name: name, databaseId: dbId);
     setState(() {
       if (!_selectedTagIds.contains(tag.id)) {
         _selectedTagIds.add(tag.id);
@@ -545,6 +577,7 @@ class _EditPageState extends ConsumerState<EditPage> {
             id: widget.entryId,
             name: name,
             description: _descController.text.trim(),
+            isTextMode: _isTextMode,
             isFavorite: _isFavorite,
             categoryId: _selectedCategoryId,
             clearCategory: _selectedCategoryId == null,
@@ -565,6 +598,51 @@ class _EditPageState extends ConsumerState<EditPage> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// 読み取ったデータの形式（テキスト/バイナリ）をユーザーに確認させる。
+  Future<bool?> _askDataType({required bool initialValue}) async {
+    var selected = initialValue;
+    return showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('データ形式を選択'),
+              content: SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment<bool>(
+                    value: true,
+                    icon: Icon(Icons.text_fields),
+                    label: Text('テキスト'),
+                  ),
+                  ButtonSegment<bool>(
+                    value: false,
+                    icon: Icon(Icons.data_array),
+                    label: Text('バイナリ'),
+                  ),
+                ],
+                selected: <bool>{selected},
+                onSelectionChanged: (values) {
+                  setLocalState(() => selected = values.first);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(selected),
+                  child: const Text('適用'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 }
 

@@ -220,6 +220,7 @@ class QrRepository {
     required String id,
     String? name,
     String? description,
+    bool? isTextMode,
     bool? isFavorite,
     String? categoryId,
     bool clearCategory = false,
@@ -232,6 +233,7 @@ class QrRepository {
       description: description != null
           ? Value(description)
           : const Value.absent(),
+      isTextMode: isTextMode != null ? Value(isTextMode) : const Value.absent(),
       isFavorite: isFavorite != null ? Value(isFavorite) : const Value.absent(),
       categoryId: clearCategory
           ? const Value(null)

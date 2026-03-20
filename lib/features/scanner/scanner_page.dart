@@ -7,12 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../../core/utils/qr_data_type_utils.dart';
 import '../../providers/providers.dart';
 import '../../router/app_router.dart';
 
 /// QR コードスキャンページ。カメラでリアルタイムに QR コードを読み取る。
 ///
-/// 読み取った QR コードはすべて標準テキスト QR として扱い、
+/// 読み取った QR コードの内容を自動判定し、
+/// テキストまたはバイナリとして保存できるようにする。
 /// DB に同じデータが登録されている場合は編集画面へ遷移する。
 @RoutePage()
 class ScannerPage extends ConsumerStatefulWidget {
@@ -88,7 +90,10 @@ class _ScannerPageState extends ConsumerState<ScannerPage> {
       } else {
         data = Uint8List.fromList(utf8.encode(rawValue));
       }
-      _navigateWithData(data, isTextMode: true);
+      _navigateWithData(
+        data,
+        isTextMode: QrDataTypeUtils.inferIsTextMode(data),
+      );
       return;
     }
   }

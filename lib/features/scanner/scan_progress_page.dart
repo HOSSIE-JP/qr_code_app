@@ -4,8 +4,12 @@ import 'dart:typed_data';
 import 'package:auto_route/auto_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../core/utils/qr_data_type_utils.dart';
 import '../../providers/providers.dart';
+import '../../router/app_router.dart';
+import '../../widgets/tag_chips.dart';
 
 /// スキャン結果の確認・保存ページ。
 ///
@@ -29,18 +33,42 @@ class ScanProgressPage extends ConsumerStatefulWidget {
 class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
   final _nameController = TextEditingController();
   final _descController = TextEditingController();
+  final _tagController = TextEditingController();
+  final List<String> _selectedTagIds = <String>[];
+  Uint8List? _thumbnail;
+  late bool _isTextMode;
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isTextMode = widget.isTextMode;
+    if (_isTextMode) {
+      final text = _decodeAsUtf8(widget.scannedData);
+      if (text != null && text.isNotEmpty) {
+        _descController.text = text;
+      }
+    } else if (QrDataTypeUtils.isLikelyText(widget.scannedData)) {
+      _isTextMode = true;
+      final text = _decodeAsUtf8(widget.scannedData);
+      if (text != null && text.isNotEmpty) {
+        _descController.text = text;
+      }
+    }
+  }
 
   @override
   void dispose() {
     _nameController.dispose();
     _descController.dispose();
+    _tagController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final allTagsAsync = ref.watch(allTagsProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('スキャン結果')),
@@ -58,14 +86,12 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
                     Row(
                       children: [
                         Icon(
-                          widget.isTextMode
-                              ? Icons.text_fields
-                              : Icons.qr_code_2,
+                          _isTextMode ? Icons.text_fields : Icons.qr_code_2,
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          widget.isTextMode ? 'テキストQRコード' : '標準QRコード',
+                          _isTextMode ? 'テキストQRコード' : 'バイナリQRコード',
                           style: theme.textTheme.titleMedium,
                         ),
                       ],
@@ -93,7 +119,65 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment<bool>(
+                          value: true,
+                          icon: Icon(Icons.text_fields),
+                          label: Text('テキスト'),
+                        ),
+                        ButtonSegment<bool>(
+                          value: false,
+                          icon: Icon(Icons.data_array),
+                          label: Text('バイナリ'),
+                        ),
+                      ],
+                      selected: <bool>{_isTextMode},
+                      onSelectionChanged: (values) {
+                        final selected = values.first;
+                        setState(() => _isTextMode = selected);
+                        if (selected && _descController.text.trim().isEmpty) {
+                          final text = _decodeAsUtf8(widget.scannedData);
+                          if (text != null && text.isNotEmpty) {
+                            _descController.text = text;
+                          }
+                        }
+                      },
+                    ),
                   ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text('サムネイル', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Center(
+              child: GestureDetector(
+                onTap: _pickThumbnail,
+                child: Container(
+                  width: 150,
+                  height: 150,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: _thumbnail != null
+                      ? Image.memory(_thumbnail!, fit: BoxFit.cover)
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.add_photo_alternate,
+                              size: 40,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(height: 4),
+                            Text('サムネイル', style: theme.textTheme.bodySmall),
+                          ],
+                        ),
                 ),
               ),
             ),
@@ -115,6 +199,50 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
                 hintText: '説明やメモを入力（任意）',
               ),
               maxLines: 3,
+            ),
+            const SizedBox(height: 24),
+            Text('タグ', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            allTagsAsync.when(
+              data: (tags) => TagChips(
+                tags: tags,
+                selectedTagIds: _selectedTagIds,
+                selectable: true,
+                onTagToggled: (tagId) {
+                  setState(() {
+                    if (_selectedTagIds.contains(tagId)) {
+                      _selectedTagIds.remove(tagId);
+                    } else {
+                      _selectedTagIds.add(tagId);
+                    }
+                  });
+                },
+              ),
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: CircularProgressIndicator(),
+              ),
+              error: (_, _) => const Text('タグの読み込みに失敗しました'),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _tagController,
+                    decoration: const InputDecoration(
+                      labelText: '新しいタグ',
+                      hintText: 'タグ名を入力',
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  onPressed: _saving ? null : _addTag,
+                  icon: const Icon(Icons.add),
+                ),
+              ],
             ),
             const SizedBox(height: 24),
             SizedBox(
@@ -156,7 +284,9 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
         description: _descController.text.trim(),
         data: widget.scannedData,
         chunkCount: 1,
-        isTextMode: widget.isTextMode,
+        isTextMode: _isTextMode,
+        thumbnail: _thumbnail,
+        tagIds: _selectedTagIds,
         databaseId: dbId,
       );
       if (!mounted) return;
@@ -186,7 +316,7 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
   /// バイナリモードの場合は可読テキスト判定後、不可ならヘックスダンプを表示する。
   String _dataPreview() {
     // テキストモードの場合は UTF-8 として直接表示
-    if (widget.isTextMode) {
+    if (_isTextMode) {
       final text = utf8.decode(widget.scannedData, allowMalformed: true);
       return text.length > 500 ? '${text.substring(0, 500)}...' : text;
     }
@@ -205,5 +335,85 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
         .map((b) => b.toRadixString(16).padLeft(2, '0'))
         .join(' ');
     return '$hex${widget.scannedData.length > 128 ? ' ...' : ''}';
+  }
+
+  /// サムネイル画像を選択し、トリミング画面で加工して設定する。
+  Future<void> _pickThumbnail() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('カメラで撮影'),
+              onTap: () => Navigator.pop(context, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('ギャラリーから選択'),
+              onTap: () => Navigator.pop(context, ImageSource.gallery),
+            ),
+            if (_thumbnail != null)
+              ListTile(
+                leading: Icon(
+                  Icons.delete,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                title: const Text('サムネイルを削除'),
+                onTap: () {
+                  setState(() => _thumbnail = null);
+                  Navigator.pop(context);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (source == null) return;
+
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: source, maxWidth: 1024);
+    if (image == null) return;
+
+    final bytes = await image.readAsBytes();
+    if (!mounted) return;
+    final cropped = await context.router.push<Uint8List>(
+      ThumbnailCropRoute(imageBytes: bytes),
+    );
+    if (cropped != null) {
+      setState(() => _thumbnail = cropped);
+    }
+  }
+
+  /// 新しいタグを作成し、作成直後に選択状態へ追加する。
+  Future<void> _addTag() async {
+    final name = _tagController.text.trim();
+    if (name.isEmpty) return;
+
+    final dbId = ref.read(currentDatabaseIdProvider);
+    final tag = await ref
+        .read(tagRepositoryProvider)
+        .createTag(name: name, databaseId: dbId);
+
+    if (!mounted) return;
+    setState(() {
+      if (!_selectedTagIds.contains(tag.id)) {
+        _selectedTagIds.add(tag.id);
+      }
+      _tagController.clear();
+    });
+    ref.invalidate(allTagsProvider);
+  }
+
+  /// UTF-8 として正しく読める場合のみ文字列を返す。
+  String? _decodeAsUtf8(Uint8List data) {
+    try {
+      return utf8.decode(data);
+    } on FormatException {
+      return null;
+    }
   }
 }

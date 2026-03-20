@@ -61,6 +61,12 @@ class _EditorPage extends ConsumerWidget {
         title: const Text('QR DB Editor'),
         actions: [
           TextButton.icon(
+            onPressed: notifier.addEntry,
+            icon: const Icon(Icons.add_box_outlined),
+            label: const Text('新規エントリ'),
+          ),
+          const SizedBox(width: 8),
+          TextButton.icon(
             onPressed: () => _openAny(context, notifier),
             icon: const Icon(Icons.folder_open),
             label: const Text('開く'),
@@ -151,13 +157,10 @@ class _EditorPage extends ConsumerWidget {
           ),
           const VerticalDivider(width: 1),
           Expanded(
-            child: selected == null
-                ? const Center(child: Text('左の一覧からエントリを選択してください。'))
-                : _EntryDetailPanel(
-                    key: ValueKey(selected.id),
-                    entry: selected,
-                    categories: document.categories,
-                  ),
+            child: _EditorRightPane(
+              selected: selected,
+              categories: document.categories,
+            ),
           ),
         ],
       ),
@@ -215,36 +218,30 @@ class _EditorPage extends ConsumerWidget {
     EditorDocument document,
     EditorStateNotifier notifier,
   ) async {
-    final extension = _preferredExtension(document.sourcePath);
+    final format = await _selectSaveFormat(context, document.sourcePath);
+    if (format == null) {
+      return;
+    }
+
     final savePath = await FilePicker.platform.saveFile(
       dialogTitle: '編集データを保存',
-      fileName: 'edited_data$extension',
+      fileName: 'edited_data.${format.extension}',
       type: FileType.custom,
-      allowedExtensions: const [
-        'qrdb',
-        'qrjson',
-        'json',
-        'xlsx',
-        'ods',
-        'csv',
-        'yaml',
-        'yml',
-      ],
+      allowedExtensions: [format.extension],
     );
     if (savePath == null) {
       return;
     }
 
-    final normalizedPath = _ensureExtension(savePath, extension);
     try {
-      await EditorFileService.saveToPath(normalizedPath, document);
-      notifier.markSaved(normalizedPath);
+      await EditorFileService.saveToPath(savePath, document);
+      notifier.markSaved(savePath);
       if (!context.mounted) {
         return;
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('保存しました: $normalizedPath')));
+      ).showSnackBar(SnackBar(content: Text('保存しました: $savePath')));
     } on Object catch (error) {
       if (!context.mounted) {
         return;
@@ -270,18 +267,14 @@ class _EditorPage extends ConsumerWidget {
       return;
     }
 
-    final normalizedPath = _ensureExtension(path, extension);
     try {
-      await EditorFileService.createTemplate(
-        filePath: normalizedPath,
-        ods: ods,
-      );
+      await EditorFileService.createTemplate(filePath: path, ods: ods);
       if (!context.mounted) {
         return;
       }
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('雛形を生成しました: $normalizedPath')));
+      ).showSnackBar(SnackBar(content: Text('雛形を生成しました: $path')));
     } on Object catch (error) {
       if (!context.mounted) {
         return;
@@ -292,23 +285,72 @@ class _EditorPage extends ConsumerWidget {
     }
   }
 
-  String _preferredExtension(String? sourcePath) {
-    if (sourcePath == null) {
-      return '.qrjson';
-    }
-    final ext = p.extension(sourcePath).toLowerCase();
-    if (ext.isEmpty) {
-      return '.qrjson';
-    }
-    return ext;
-  }
+  /// 保存形式を選択するダイアログを表示する。
+  Future<_SaveFormat?> _selectSaveFormat(
+    BuildContext context,
+    String? sourcePath,
+  ) async {
+    final sourceExt = p.extension(sourcePath ?? '').toLowerCase();
+    final initial = _SaveFormat.values.firstWhere(
+      (value) => '.${value.extension}' == sourceExt,
+      orElse: () => _SaveFormat.qrjson,
+    );
 
-  String _ensureExtension(String path, String extension) {
-    if (p.extension(path).isNotEmpty) {
-      return path;
-    }
-    return '$path$extension';
+    var selected = initial;
+    return showDialog<_SaveFormat>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('保存形式を選択'),
+              content: DropdownButtonFormField<_SaveFormat>(
+                initialValue: selected,
+                decoration: const InputDecoration(labelText: '形式'),
+                items: [
+                  for (final format in _SaveFormat.values)
+                    DropdownMenuItem<_SaveFormat>(
+                      value: format,
+                      child: Text(format.label),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setLocalState(() => selected = value);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(selected),
+                  child: const Text('次へ'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
+}
+
+/// 保存時に選択可能なフォーマット。
+enum _SaveFormat {
+  qrdb('QR DB (*.qrdb)', 'qrdb'),
+  qrjson('QR JSON (*.qrjson)', 'qrjson'),
+  json('JSON (*.json)', 'json'),
+  xlsx('Excel (*.xlsx)', 'xlsx'),
+  ods('ODS (*.ods)', 'ods'),
+  csv('CSV (*.csv)', 'csv'),
+  yaml('YAML (*.yaml)', 'yaml');
+
+  const _SaveFormat(this.label, this.extension);
+
+  final String label;
+  final String extension;
 }
 
 class _SortButton extends StatelessWidget {
@@ -349,8 +391,11 @@ class _EntryTable extends ConsumerWidget {
         sortAscending: document.ascending,
         columns: const [
           DataColumn(label: Text('名前')),
+          DataColumn(label: Text('★')),
+          DataColumn(label: Text('T')),
           DataColumn(label: Text('サイズ')),
           DataColumn(label: Text('更新日')),
+          DataColumn(label: Text('削除')),
         ],
         rows: [
           for (final entry in entries)
@@ -359,10 +404,95 @@ class _EntryTable extends ConsumerWidget {
               onSelectChanged: (_) => onSelect(entry.id),
               cells: [
                 DataCell(Text(entry.name)),
+                DataCell(
+                  Checkbox(
+                    value: entry.isFavorite,
+                    onChanged: (value) {
+                      if (value == null) return;
+                      notifier.setEntryFavorite(entry.id, value);
+                    },
+                  ),
+                ),
+                DataCell(
+                  Checkbox(
+                    value: entry.isTextMode,
+                    onChanged: (value) {
+                      if (value == null) return;
+                      notifier.setEntryTextMode(entry.id, value);
+                    },
+                  ),
+                ),
                 DataCell(Text('${entry.dataSize} bytes')),
                 DataCell(Text(entry.updatedAt.toLocal().toString())),
+                DataCell(
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'エントリを削除',
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('エントリ削除'),
+                          content: Text('「${entry.name}」を削除しますか？'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(false),
+                              child: const Text('キャンセル'),
+                            ),
+                            FilledButton(
+                              onPressed: () => Navigator.of(context).pop(true),
+                              child: const Text('削除'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        notifier.deleteEntry(entry.id);
+                      }
+                    },
+                  ),
+                ),
               ],
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 右側ペインを「エントリ詳細」と「分類編集」の2タブで表示する。
+class _EditorRightPane extends StatelessWidget {
+  const _EditorRightPane({required this.selected, required this.categories});
+
+  final QrEntryModel? selected;
+  final List<CategoryModel> categories;
+
+  @override
+  Widget build(BuildContext context) {
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          const TabBar(
+            tabs: [
+              Tab(icon: Icon(Icons.description), text: 'エントリ詳細'),
+              Tab(icon: Icon(Icons.label), text: '分類編集'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                selected == null
+                    ? const Center(child: Text('左の一覧からエントリを選択してください。'))
+                    : _EntryDetailPanel(
+                        key: ValueKey(selected!.id),
+                        entry: selected!,
+                        categories: categories,
+                      ),
+                const _TaxonomyEditorPanel(),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -418,18 +548,9 @@ class _EntryDetailPanel extends ConsumerWidget {
                 notifier.updateSelectedEntry(categoryId: value),
           ),
           const SizedBox(height: 8),
-          SwitchListTile(
-            value: entry.isTextMode,
-            title: const Text('テキストモード'),
-            onChanged: (value) =>
-                notifier.updateSelectedEntry(isTextMode: value),
-          ),
-          SwitchListTile(
-            value: entry.isFavorite,
-            title: const Text('お気に入り'),
-            onChanged: (value) =>
-                notifier.updateSelectedEntry(isFavorite: value),
-          ),
+          Text('タグ割り当て', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          _EntryTagSelector(entry: entry),
           const SizedBox(height: 8),
           Text('QR データサイズ: ${entry.dataSize} bytes'),
           const SizedBox(height: 8),
@@ -561,5 +682,265 @@ class _QrPreview extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// 選択中エントリにタグを割り当てる UI。
+class _EntryTagSelector extends ConsumerWidget {
+  const _EntryTagSelector({required this.entry});
+
+  final QrEntryModel entry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final document = ref.watch(editorStateProvider);
+    final notifier = ref.read(editorStateProvider.notifier);
+    if (document.tags.isEmpty) {
+      return const Text('タグがありません。下の入力欄から追加してください。');
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final tag in document.tags)
+          FilterChip(
+            label: Text(tag.name),
+            selected: entry.tags.any((value) => value.id == tag.id),
+            onSelected: (_) => notifier.toggleTagForSelectedEntry(tag.id),
+          ),
+      ],
+    );
+  }
+}
+
+/// タグ/カテゴリをまとめて編集する専用タブ。
+class _TaxonomyEditorPanel extends StatelessWidget {
+  const _TaxonomyEditorPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: const [
+        _CategoryEditorPanel(),
+        SizedBox(height: 16),
+        _TagEditorPanel(),
+      ],
+    );
+  }
+}
+
+/// カテゴリの新規追加・名称変更・削除を行うパネル。
+class _CategoryEditorPanel extends ConsumerStatefulWidget {
+  const _CategoryEditorPanel();
+
+  @override
+  ConsumerState<_CategoryEditorPanel> createState() =>
+      _CategoryEditorPanelState();
+}
+
+class _CategoryEditorPanelState extends ConsumerState<_CategoryEditorPanel> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final document = ref.watch(editorStateProvider);
+    final notifier = ref.read(editorStateProvider.notifier);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('カテゴリ編集', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                decoration: const InputDecoration(
+                  labelText: '新規カテゴリ名',
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: () {
+                notifier.addCategory(_controller.text);
+                _controller.clear();
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('追加'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (document.categories.isNotEmpty)
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final category in document.categories)
+                InputChip(
+                  label: Text(category.name),
+                  onPressed: () async {
+                    final renamed = await _showRenameDialog(
+                      context,
+                      category.name,
+                    );
+                    if (renamed == null) return;
+                    notifier.renameCategory(category.id, renamed);
+                  },
+                  onDeleted: () => notifier.deleteCategory(category.id),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Future<String?> _showRenameDialog(
+    BuildContext context,
+    String currentName,
+  ) async {
+    final controller = TextEditingController(text: currentName);
+    try {
+      return showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('カテゴリ名を変更'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'カテゴリ名'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+}
+
+/// タグの新規追加・リネーム・削除を行うパネル。
+class _TagEditorPanel extends ConsumerStatefulWidget {
+  const _TagEditorPanel();
+
+  @override
+  ConsumerState<_TagEditorPanel> createState() => _TagEditorPanelState();
+}
+
+class _TagEditorPanelState extends ConsumerState<_TagEditorPanel> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final document = ref.watch(editorStateProvider);
+    final notifier = ref.read(editorStateProvider.notifier);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('タグ編集', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _controller,
+                decoration: const InputDecoration(
+                  labelText: '新規タグ名',
+                  isDense: true,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: () {
+                notifier.addTag(_controller.text);
+                _controller.clear();
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('追加'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (document.tags.isNotEmpty)
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final tag in document.tags)
+                InputChip(
+                  label: Text(tag.name),
+                  onPressed: () async {
+                    final renamed = await _showRenameDialog(context, tag.name);
+                    if (renamed == null) return;
+                    notifier.renameTag(tag.id, renamed);
+                  },
+                  onDeleted: () => notifier.deleteTag(tag.id),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Future<String?> _showRenameDialog(
+    BuildContext context,
+    String currentName,
+  ) async {
+    final controller = TextEditingController(text: currentName);
+    try {
+      return showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('タグ名を変更'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'タグ名'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('キャンセル'),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.of(context).pop(controller.text.trim()),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
   }
 }

@@ -226,6 +226,24 @@ class EditorStateNotifier extends Notifier<EditorDocument> {
     state = state.copyWith(entries: updatedEntries, isDirty: true);
   }
 
+  /// 指定エントリのお気に入り状態を更新する。
+  void setEntryFavorite(String entryId, bool isFavorite) {
+    _updateEntryById(
+      entryId,
+      (entry) =>
+          entry.copyWith(isFavorite: isFavorite, updatedAt: DateTime.now()),
+    );
+  }
+
+  /// 指定エントリのテキストモード状態を更新する。
+  void setEntryTextMode(String entryId, bool isTextMode) {
+    _updateEntryById(
+      entryId,
+      (entry) =>
+          entry.copyWith(isTextMode: isTextMode, updatedAt: DateTime.now()),
+    );
+  }
+
   void setSelectedThumbnail(Uint8List? thumbnailBytes) {
     final selectedId = state.selectedEntryId;
     if (selectedId == null) {
@@ -245,9 +263,233 @@ class EditorStateNotifier extends Notifier<EditorDocument> {
     state = state.copyWith(entries: updatedEntries, isDirty: true);
   }
 
+  /// 新規エントリを追加し、選択状態をそのエントリに切り替える。
+  void addEntry() {
+    final now = DateTime.now();
+    final id = 'entry_${now.microsecondsSinceEpoch.toRadixString(36)}';
+    final databaseId = state.entries.isNotEmpty
+        ? state.entries.first.databaseId
+        : 'default';
+
+    final newEntry = QrEntryModel(
+      id: id,
+      databaseId: databaseId,
+      name: '新規エントリ',
+      description: '',
+      originalData: Uint8List(0),
+      dataSize: 0,
+      chunkCount: 0,
+      isTextMode: true,
+      isFavorite: false,
+      thumbnail: null,
+      createdAt: now,
+      updatedAt: now,
+      tags: const <TagModel>[],
+    );
+
+    final updatedEntries = <QrEntryModel>[newEntry, ...state.entries];
+    state = state.copyWith(
+      entries: updatedEntries,
+      selectedEntryId: newEntry.id,
+      isDirty: true,
+    );
+  }
+
+  /// 指定エントリを削除する。
+  void deleteEntry(String entryId) {
+    final beforeCount = state.entries.length;
+    final updatedEntries = state.entries
+        .where((entry) => entry.id != entryId)
+        .toList();
+    if (updatedEntries.length == beforeCount) {
+      return;
+    }
+
+    final nextSelectedId = state.selectedEntryId == entryId
+        ? (updatedEntries.isNotEmpty ? updatedEntries.first.id : null)
+        : state.selectedEntryId;
+
+    state = EditorDocument(
+      entries: updatedEntries,
+      tags: state.tags,
+      categories: state.categories,
+      version: state.version,
+      exportedAt: state.exportedAt,
+      sourcePath: state.sourcePath,
+      selectedEntryId: nextSelectedId,
+      filterText: state.filterText,
+      sortField: state.sortField,
+      ascending: state.ascending,
+      isDirty: true,
+    );
+  }
+
+  /// タグを新規追加する。
+  void addTag(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    if (state.tags.any((tag) => tag.name == trimmed)) return;
+
+    final now = DateTime.now();
+    final id = 'tag_${now.microsecondsSinceEpoch.toRadixString(36)}';
+    final databaseId = state.entries.isNotEmpty
+        ? state.entries.first.databaseId
+        : 'default';
+    final tag = TagModel(
+      id: id,
+      databaseId: databaseId,
+      name: trimmed,
+      color: 0xFF6750A4,
+    );
+    state = state.copyWith(tags: [...state.tags, tag], isDirty: true);
+  }
+
+  /// タグ名を更新する。
+  void renameTag(String tagId, String newName) {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+
+    final updatedTags = state.tags
+        .map((tag) => tag.id == tagId ? tag.copyWith(name: trimmed) : tag)
+        .toList();
+
+    final updatedEntries = state.entries.map((entry) {
+      final nextTags = entry.tags
+          .map((tag) => tag.id == tagId ? tag.copyWith(name: trimmed) : tag)
+          .toList();
+      return entry.copyWith(tags: nextTags, updatedAt: DateTime.now());
+    }).toList();
+
+    state = state.copyWith(
+      tags: updatedTags,
+      entries: updatedEntries,
+      isDirty: true,
+    );
+  }
+
+  /// タグを削除し、各エントリからも紐付きを外す。
+  void deleteTag(String tagId) {
+    final updatedTags = state.tags.where((tag) => tag.id != tagId).toList();
+    final updatedEntries = state.entries.map((entry) {
+      final nextTags = entry.tags.where((tag) => tag.id != tagId).toList();
+      return entry.copyWith(tags: nextTags, updatedAt: DateTime.now());
+    }).toList();
+
+    state = state.copyWith(
+      tags: updatedTags,
+      entries: updatedEntries,
+      isDirty: true,
+    );
+  }
+
+  /// カテゴリを新規追加する。
+  void addCategory(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    if (state.categories.any((category) => category.name == trimmed)) return;
+
+    final now = DateTime.now();
+    final id = 'category_${now.microsecondsSinceEpoch.toRadixString(36)}';
+    final databaseId = state.entries.isNotEmpty
+        ? state.entries.first.databaseId
+        : 'default';
+    final category = CategoryModel(
+      id: id,
+      databaseId: databaseId,
+      name: trimmed,
+      sortOrder: state.categories.length,
+    );
+    state = state.copyWith(
+      categories: [...state.categories, category],
+      isDirty: true,
+    );
+  }
+
+  /// カテゴリ名を更新する。
+  void renameCategory(String categoryId, String newName) {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+
+    final updatedCategories = state.categories
+        .map(
+          (category) => category.id == categoryId
+              ? category.copyWith(name: trimmed)
+              : category,
+        )
+        .toList();
+    state = state.copyWith(categories: updatedCategories, isDirty: true);
+  }
+
+  /// カテゴリを削除し、紐付いているエントリは未分類に戻す。
+  void deleteCategory(String categoryId) {
+    final updatedCategories = state.categories
+        .where((category) => category.id != categoryId)
+        .toList();
+    final updatedEntries = state.entries
+        .map(
+          (entry) => entry.categoryId == categoryId
+              ? entry.copyWith(categoryId: null, updatedAt: DateTime.now())
+              : entry,
+        )
+        .toList();
+
+    state = state.copyWith(
+      categories: updatedCategories,
+      entries: updatedEntries,
+      isDirty: true,
+    );
+  }
+
+  /// 選択中エントリに対してタグを付け外しする。
+  void toggleTagForSelectedEntry(String tagId) {
+    final selectedId = state.selectedEntryId;
+    if (selectedId == null) return;
+
+    TagModel? targetTag;
+    for (final tag in state.tags) {
+      if (tag.id == tagId) {
+        targetTag = tag;
+        break;
+      }
+    }
+    if (targetTag == null) return;
+    final resolvedTag = targetTag;
+
+    final updatedEntries = state.entries.map((entry) {
+      if (entry.id != selectedId) return entry;
+
+      final hasTag = entry.tags.any((tag) => tag.id == tagId);
+      final nextTags = hasTag
+          ? entry.tags.where((tag) => tag.id != tagId).toList()
+          : [...entry.tags, resolvedTag];
+      return entry.copyWith(tags: nextTags, updatedAt: DateTime.now());
+    }).toList();
+
+    state = state.copyWith(entries: updatedEntries, isDirty: true);
+  }
+
   /// 保存完了時に保存先パスと dirty フラグを更新する。
   void markSaved(String? sourcePath) {
     state = state.copyWith(sourcePath: sourcePath, isDirty: false);
+  }
+
+  void _updateEntryById(
+    String entryId,
+    QrEntryModel Function(QrEntryModel entry) transform,
+  ) {
+    var updated = false;
+    final updatedEntries = state.entries.map((entry) {
+      if (entry.id != entryId) {
+        return entry;
+      }
+      updated = true;
+      return transform(entry);
+    }).toList();
+
+    if (!updated) {
+      return;
+    }
+    state = state.copyWith(entries: updatedEntries, isDirty: true);
   }
 
   static Map<String, dynamic> _asMap(dynamic value) {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:auto_route/auto_route.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -116,7 +118,7 @@ class _ImportPageState extends ConsumerState<ImportPage> {
       if (format == 'zip') {
         importedCount = await exportRepo.importFromZip(bytes, databaseId: dbId);
       } else {
-        final jsonString = String.fromCharCodes(bytes);
+        final jsonString = utf8.decode(bytes);
         importedCount = await exportRepo.importFromJson(
           jsonString,
           databaseId: dbId,

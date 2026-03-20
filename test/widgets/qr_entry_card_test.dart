@@ -62,6 +62,16 @@ void main() {
       // バッジとラベルで2箇所表示
       expect(find.text('QR未登録'), findsWidgets);
     });
+
+    testWidgets('QR 未登録エントリはサムネイルをグレースケール表示する', (tester) async {
+      await tester.pumpWidget(buildCard(entry: createEntry(dataSize: 0)));
+      expect(find.byType(ColorFiltered), findsOneWidget);
+    });
+
+    testWidgets('QR 登録済みエントリはグレースケール表示しない', (tester) async {
+      await tester.pumpWidget(buildCard(entry: createEntry(dataSize: 10)));
+      expect(find.byType(ColorFiltered), findsNothing);
+    });
   });
 
   group('QrEntryCard 選択モード', () {

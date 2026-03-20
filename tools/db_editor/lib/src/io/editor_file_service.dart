@@ -83,10 +83,10 @@ class EditorFileService {
       categories: [_sampleCategory()],
     );
     if (ods) {
-      await _saveAsOds(filePath, template);
+      await _saveAsOds(filePath, template, writeBinaryAssets: false);
       return;
     }
-    await _saveAsExcel(filePath, template);
+    await _saveAsExcel(filePath, template, writeBinaryAssets: false);
   }
 
   static Future<EditorDocument> _loadFromJsonPath(String filePath) async {
@@ -360,8 +360,9 @@ class EditorFileService {
 
   static Future<void> _saveAsExcel(
     String filePath,
-    EditorDocument document,
-  ) async {
+    EditorDocument document, {
+    bool writeBinaryAssets = true,
+  }) async {
     final excel = Excel.createExcel();
     _writeTabularSheets(
       writeSheet: (name, rows) {
@@ -372,6 +373,7 @@ class EditorFileService {
       },
       document: document,
       baseDir: p.dirname(filePath),
+      writeBinaryAssets: writeBinaryAssets,
     );
 
     if (excel.sheets.containsKey('Sheet1')) {
@@ -386,13 +388,15 @@ class EditorFileService {
 
   static Future<void> _saveAsOds(
     String filePath,
-    EditorDocument document,
-  ) async {
+    EditorDocument document, {
+    bool writeBinaryAssets = true,
+  }) async {
     final sheets = <String, List<List<String>>>{};
     _writeTabularSheets(
       writeSheet: (name, rows) => sheets[name] = rows,
       document: document,
       baseDir: p.dirname(filePath),
+      writeBinaryAssets: writeBinaryAssets,
     );
 
     final archive = Archive();
@@ -426,8 +430,9 @@ class EditorFileService {
 
   static Future<void> _saveAsCsvBundle(
     String filePath,
-    EditorDocument document,
-  ) async {
+    EditorDocument document, {
+    bool writeBinaryAssets = true,
+  }) async {
     final dir = Directory(p.dirname(filePath));
     final base = p.basenameWithoutExtension(filePath);
     final sheets = <String, List<List<String>>>{};
@@ -435,6 +440,7 @@ class EditorFileService {
       writeSheet: (name, rows) => sheets[name] = rows,
       document: document,
       baseDir: dir.path,
+      writeBinaryAssets: writeBinaryAssets,
     );
 
     for (final entry in sheets.entries) {
@@ -449,6 +455,7 @@ class EditorFileService {
     required void Function(String name, List<List<String>> rows) writeSheet,
     required EditorDocument document,
     required String baseDir,
+    bool writeBinaryAssets = true,
   }) {
     final entries = <List<String>>[
       const <String>[
@@ -469,21 +476,31 @@ class EditorFileService {
       ],
     ];
 
-    final assetDataDir = Directory(p.join(baseDir, 'data'));
-    final assetThumbDir = Directory(p.join(baseDir, 'thumbnails'));
-    if (!assetDataDir.existsSync()) {
-      assetDataDir.createSync(recursive: true);
-    }
-    if (!assetThumbDir.existsSync()) {
-      assetThumbDir.createSync(recursive: true);
+    Directory? assetDataDir;
+    Directory? assetThumbDir;
+    if (writeBinaryAssets) {
+      assetDataDir = Directory(p.join(baseDir, 'data'));
+      assetThumbDir = Directory(p.join(baseDir, 'thumbnails'));
+      if (!assetDataDir.existsSync()) {
+        assetDataDir.createSync(recursive: true);
+      }
+      if (!assetThumbDir.existsSync()) {
+        assetThumbDir.createSync(recursive: true);
+      }
     }
 
     for (final entry in document.entries) {
-      final dataFilePath = p.join(assetDataDir.path, '${entry.id}.bin');
-      File(dataFilePath).writeAsBytesSync(entry.originalData);
+      var dataPathForRow = '';
+      if (writeBinaryAssets && assetDataDir != null) {
+        final dataFilePath = p.join(assetDataDir.path, '${entry.id}.bin');
+        File(dataFilePath).writeAsBytesSync(entry.originalData);
+        dataPathForRow = p.relative(dataFilePath, from: baseDir);
+      }
 
       String thumbnailPath = '';
-      if (entry.thumbnail != null) {
+      if (writeBinaryAssets &&
+          entry.thumbnail != null &&
+          assetThumbDir != null) {
         thumbnailPath = p.join(assetThumbDir.path, '${entry.id}.png');
         File(thumbnailPath).writeAsBytesSync(entry.thumbnail!);
       }
@@ -500,7 +517,7 @@ class EditorFileService {
         entry.isTextMode
             ? utf8.decode(entry.originalData, allowMalformed: true)
             : '',
-        p.relative(dataFilePath, from: baseDir),
+        dataPathForRow,
         thumbnailPath.isEmpty ? '' : p.relative(thumbnailPath, from: baseDir),
         entry.createdAt.toUtc().toIso8601String(),
         entry.updatedAt.toUtc().toIso8601String(),
