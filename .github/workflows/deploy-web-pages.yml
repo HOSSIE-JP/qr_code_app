@@ -1,0 +1,74 @@
+name: Deploy Web Apps to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install app dependencies
+        run: flutter pub get
+
+      - name: Build app + db_editor web (GitHub Pages base-href)
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          if [[ "$REPO_NAME" == *.github.io ]]; then
+            APP_BASE_HREF="/"
+            DB_EDITOR_BASE_HREF="/db_editor/"
+          else
+            APP_BASE_HREF="/$REPO_NAME/"
+            DB_EDITOR_BASE_HREF="/$REPO_NAME/db_editor/"
+          fi
+
+          echo "App base-href: $APP_BASE_HREF"
+          echo "DB editor base-href: $DB_EDITOR_BASE_HREF"
+
+          flutter build web --release --base-href "$APP_BASE_HREF"
+
+          pushd tools/db_editor
+          flutter pub get
+          flutter build web --release --base-href "$DB_EDITOR_BASE_HREF"
+          popd
+
+          rm -rf pages-dist
+          mkdir -p pages-dist/db_editor
+          cp -R build/web/. pages-dist/
+          cp -R tools/db_editor/build/web/. pages-dist/db_editor/
+          touch pages-dist/.nojekyll
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

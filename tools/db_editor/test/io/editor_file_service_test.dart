@@ -73,6 +73,45 @@ void main() {
         source.entries.single.originalData,
       );
     });
+
+    test('bytes から qrdb を読み込める', () async {
+      final dir = await Directory.systemTemp.createTemp('db_editor_qrdb_bytes');
+      addTearDown(() => dir.delete(recursive: true));
+
+      final source = _sampleDocument();
+      final filePath = '${dir.path}/data.qrdb';
+      await EditorFileService.saveToPath(filePath, source);
+
+      final bytes = await File(filePath).readAsBytes();
+      final loaded = await EditorFileService.loadFromBytes(
+        fileName: 'data.qrdb',
+        bytes: bytes,
+      );
+
+      expect(loaded.entries, isNotEmpty);
+      expect(loaded.entries.single.name, source.entries.single.name);
+      expect(
+        loaded.entries.single.originalData,
+        source.entries.single.originalData,
+      );
+    });
+
+    test('bytes 出力で qrdb を生成できる', () async {
+      final source = _sampleDocument();
+      final bytes = await EditorFileService.exportAsBytes(
+        extension: '.qrdb',
+        document: source,
+      );
+
+      expect(bytes, isNotEmpty);
+      final loaded = await EditorFileService.loadFromBytes(
+        fileName: 'exported.qrdb',
+        bytes: bytes,
+      );
+
+      expect(loaded.entries.single.name, source.entries.single.name);
+      expect(loaded.tags.single.name, source.tags.single.name);
+    });
   });
 }
 

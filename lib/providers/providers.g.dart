@@ -825,3 +825,156 @@ final class SearchResultsProvider
 }
 
 String _$searchResultsHash() => r'0ae44cec1e0e309051e6d56a6873db76c9daa27c';
+
+/// アプリ内表示用のバージョン文字列を返す。
+///
+/// 形式は `version+buildNumber`。
+/// buildNumber が空の場合は `version` のみ返す。
+
+@ProviderFor(appVersionLabel)
+final appVersionLabelProvider = AppVersionLabelProvider._();
+
+/// アプリ内表示用のバージョン文字列を返す。
+///
+/// 形式は `version+buildNumber`。
+/// buildNumber が空の場合は `version` のみ返す。
+
+final class AppVersionLabelProvider
+    extends $FunctionalProvider<AsyncValue<String>, String, FutureOr<String>>
+    with $FutureModifier<String>, $FutureProvider<String> {
+  /// アプリ内表示用のバージョン文字列を返す。
+  ///
+  /// 形式は `version+buildNumber`。
+  /// buildNumber が空の場合は `version` のみ返す。
+  AppVersionLabelProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'appVersionLabelProvider',
+        isAutoDispose: true,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$appVersionLabelHash();
+
+  @$internal
+  @override
+  $FutureProviderElement<String> $createElement($ProviderPointer pointer) =>
+      $FutureProviderElement(pointer);
+
+  @override
+  FutureOr<String> create(Ref ref) {
+    return appVersionLabel(ref);
+  }
+}
+
+String _$appVersionLabelHash() => r'0d3a30edb7adb9b49db8b02de412d79ee5446b1f';
+
+/// クラウドバックアップ連携サービス。
+
+@ProviderFor(cloudBackupService)
+final cloudBackupServiceProvider = CloudBackupServiceProvider._();
+
+/// クラウドバックアップ連携サービス。
+
+final class CloudBackupServiceProvider
+    extends
+        $FunctionalProvider<
+          CloudBackupService,
+          CloudBackupService,
+          CloudBackupService
+        >
+    with $Provider<CloudBackupService> {
+  /// クラウドバックアップ連携サービス。
+  CloudBackupServiceProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'cloudBackupServiceProvider',
+        isAutoDispose: true,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$cloudBackupServiceHash();
+
+  @$internal
+  @override
+  $ProviderElement<CloudBackupService> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  CloudBackupService create(Ref ref) {
+    return cloudBackupService(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(CloudBackupService value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<CloudBackupService>(value),
+    );
+  }
+}
+
+String _$cloudBackupServiceHash() =>
+    r'a5d3c225e192d3bbcd802b6695c7f6f6aa54a2e6';
+
+/// Import 画面で利用するファイル選択サービス。
+
+@ProviderFor(importFilePickerService)
+final importFilePickerServiceProvider = ImportFilePickerServiceProvider._();
+
+/// Import 画面で利用するファイル選択サービス。
+
+final class ImportFilePickerServiceProvider
+    extends
+        $FunctionalProvider<
+          ImportFilePickerService,
+          ImportFilePickerService,
+          ImportFilePickerService
+        >
+    with $Provider<ImportFilePickerService> {
+  /// Import 画面で利用するファイル選択サービス。
+  ImportFilePickerServiceProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'importFilePickerServiceProvider',
+        isAutoDispose: true,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$importFilePickerServiceHash();
+
+  @$internal
+  @override
+  $ProviderElement<ImportFilePickerService> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  ImportFilePickerService create(Ref ref) {
+    return importFilePickerService(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(ImportFilePickerService value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<ImportFilePickerService>(value),
+    );
+  }
+}
+
+String _$importFilePickerServiceHash() =>
+    r'a1ed7e2616843fb45e66d54ba6337ed11d032147';

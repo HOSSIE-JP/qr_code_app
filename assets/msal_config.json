@@ -1,0 +1,15 @@
+{
+  "authorities": [
+    {
+      "type": "AAD",
+      "authority_url": "https://login.microsoftonline.com/consumers",
+      "audience": {
+        "type": "PersonalMicrosoftAccount"
+      },
+      "default": true
+    }
+  ],
+  "authorization_user_agent": "BROWSER",
+  "broker_redirect_uri_registered": false,
+  "account_mode": "SINGLE"
+}

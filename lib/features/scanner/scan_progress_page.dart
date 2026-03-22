@@ -42,6 +42,9 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
   @override
   void initState() {
     super.initState();
+    _nameController.text = _buildDefaultEntryName();
+    _nameController.addListener(_onFormChanged);
+    _descController.addListener(_onFormChanged);
     _isTextMode = widget.isTextMode;
     if (_isTextMode) {
       final text = _decodeAsUtf8(widget.scannedData);
@@ -59,10 +62,18 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
 
   @override
   void dispose() {
+    _nameController.removeListener(_onFormChanged);
+    _descController.removeListener(_onFormChanged);
     _nameController.dispose();
     _descController.dispose();
     _tagController.dispose();
     super.dispose();
+  }
+
+  /// 入力変更時に suffix アイコン表示を更新する。
+  void _onFormChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -186,17 +197,31 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
             const SizedBox(height: 12),
             TextField(
               controller: _nameController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '名称 *',
                 hintText: 'QRコードの名前を入力',
+                suffixIcon: _nameController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: '入力をクリア',
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _nameController.clear(),
+                      )
+                    : null,
               ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _descController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: '説明・メモ',
                 hintText: '説明やメモを入力（任意）',
+                suffixIcon: _descController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: '入力をクリア',
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => _descController.clear(),
+                      )
+                    : null,
               ),
               maxLines: 3,
             ),
@@ -208,6 +233,7 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
                 tags: tags,
                 selectedTagIds: _selectedTagIds,
                 selectable: true,
+                maxHeight: 140,
                 onTagToggled: (tagId) {
                   setState(() {
                     if (_selectedTagIds.contains(tagId)) {
@@ -308,6 +334,20 @@ class _ScanProgressPageState extends ConsumerState<ScanProgressPage> {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  /// 新規登録時に使うデフォルト名称を返す。
+  ///
+  /// 形式: yyyy/MM/dd HH:mm:ss
+  String _buildDefaultEntryName() {
+    final now = DateTime.now();
+    final year = now.year.toString().padLeft(4, '0');
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    final second = now.second.toString().padLeft(2, '0');
+    return '$year/$month/$day $hour:$minute:$second';
   }
 
   /// スキャンされたデータのプレビュー文字列を返す。

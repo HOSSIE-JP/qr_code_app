@@ -535,25 +535,20 @@ class _HomePageState extends ConsumerState<HomePage> {
   ) {
     if (entries.isEmpty) return const [];
     final expanded = _expandedCategories[category.id] ?? true;
+
     return [
-      SliverToBoxAdapter(
-        child: InkWell(
+      SliverPersistentHeader(
+        pinned: expanded,
+        delegate: _CategoryHeaderDelegate(
+          categoryName: category.name,
+          itemCount: entries.length,
+          expanded: expanded,
           onTap: () {
             setState(() {
               _expandedCategories[category.id] = !expanded;
             });
           },
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: Row(
-              children: [
-                const Icon(Icons.folder, size: 18),
-                const SizedBox(width: 8),
-                Expanded(child: Text('${category.name} (${entries.length})')),
-                Icon(expanded ? Icons.expand_less : Icons.expand_more),
-              ],
-            ),
-          ),
+          backgroundColor: Theme.of(context).colorScheme.surface,
         ),
       ),
       if (expanded)
@@ -598,25 +593,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 value: isSelected,
                 onChanged: (_) => _toggleSelection(entry.id),
               )
-            : SizedBox(
-                width: 40,
-                height: 40,
-                child: entry.thumbnail != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.memory(
-                          entry.thumbnail!,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : Container(
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Icon(Icons.qr_code_2, size: 20),
-                      ),
-              ),
+            : _buildListThumbnail(entry, theme, size: 40),
         title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: entry.description.isNotEmpty
             ? Text(
@@ -736,26 +713,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       value: isSelected,
                       onChanged: (_) => _toggleSelection(entry.id),
                     )
-                  : SizedBox(
-                      width: 48,
-                      height: 48,
-                      child: entry.thumbnail != null
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.memory(
-                                entry.thumbnail!,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          : Container(
-                              decoration: BoxDecoration(
-                                color:
-                                    theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(Icons.qr_code_2),
-                            ),
-                    ),
+                  : _buildListThumbnail(entry, theme, size: 48),
               title: Text(
                 entry.name,
                 maxLines: 1,
@@ -836,6 +794,70 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
+  /// リスト表示用のサムネイルを構築する。
+  ///
+  /// QR未登録エントリはグレースケール表示にし、
+  /// decode 負荷を抑えるため cacheWidth を指定する。
+  Widget _buildListThumbnail(
+    QrEntryModel entry,
+    ThemeData theme, {
+    required double size,
+  }) {
+    Widget thumbnail;
+    if (entry.thumbnail != null) {
+      thumbnail = ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.memory(
+          entry.thumbnail!,
+          fit: BoxFit.cover,
+          width: size,
+          height: size,
+          cacheWidth: 160,
+          filterQuality: FilterQuality.low,
+        ),
+      );
+    } else {
+      thumbnail = Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: const Icon(Icons.qr_code_2),
+      );
+    }
+
+    final sized = SizedBox(width: size, height: size, child: thumbnail);
+    if (entry.hasQrData) {
+      return sized;
+    }
+
+    return ColorFiltered(
+      colorFilter: const ColorFilter.matrix(<double>[
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0.2126,
+        0.7152,
+        0.0722,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+      ]),
+      child: Opacity(opacity: 0.55, child: sized),
+    );
+  }
+
   /// 選択中エントリにカテゴリを一括設定する。
   Future<void> _showCategoryEditorForSelected() async {
     final categories = ref
@@ -873,5 +895,63 @@ class _HomePageState extends ConsumerState<HomePage> {
         .setCategoryForEntries(_selectedIds.toList(), selected);
     _clearSelection();
     setState(() => _categoryEditMode = false);
+  }
+}
+
+/// カテゴリ見出しをピン止め表示する Sliver ヘッダー。
+class _CategoryHeaderDelegate extends SliverPersistentHeaderDelegate {
+  _CategoryHeaderDelegate({
+    required this.categoryName,
+    required this.itemCount,
+    required this.expanded,
+    required this.onTap,
+    required this.backgroundColor,
+  });
+
+  final String categoryName;
+  final int itemCount;
+  final bool expanded;
+  final VoidCallback onTap;
+  final Color backgroundColor;
+
+  @override
+  double get minExtent => 44;
+
+  @override
+  double get maxExtent => 44;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return ColoredBox(
+      color: backgroundColor,
+      child: SizedBox.expand(
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Row(
+              children: [
+                const Icon(Icons.folder, size: 18),
+                const SizedBox(width: 8),
+                Expanded(child: Text('$categoryName ($itemCount)')),
+                Icon(expanded ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _CategoryHeaderDelegate oldDelegate) {
+    return categoryName != oldDelegate.categoryName ||
+        itemCount != oldDelegate.itemCount ||
+        expanded != oldDelegate.expanded ||
+        backgroundColor != oldDelegate.backgroundColor;
   }
 }

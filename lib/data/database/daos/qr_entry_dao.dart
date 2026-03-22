@@ -70,6 +70,22 @@ class QrEntryDao extends DatabaseAccessor<AppDatabase> with _$QrEntryDaoMixin {
             ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)]))
           .watch();
 
+  /// 指定データベースの一覧表示向けエントリを監視する。
+  ///
+  /// `originalData` の BLOB 列を読み込まず、初期描画を軽量化する。
+  Stream<List<QrEntry>> watchEntrySummariesByDatabase(String databaseId) {
+    final query =
+        (selectOnly(qrEntries)
+              ..addColumns(_summaryColumns)
+              ..where(qrEntries.databaseId.equals(databaseId))
+              ..orderBy([OrderingTerm.desc(qrEntries.updatedAt)]))
+            .watch();
+
+    return query.map(
+      (rows) => rows.map(_toSummaryEntry).toList(growable: false),
+    );
+  }
+
   Stream<List<QrEntry>> watchAllEntries() => (select(
     qrEntries,
   )..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])).watch();
@@ -79,9 +95,54 @@ class QrEntryDao extends DatabaseAccessor<AppDatabase> with _$QrEntryDaoMixin {
 
   /// 指定データベース内で名称が一致するエントリを取得する。
   Future<QrEntry?> getEntryByNameInDatabase(String databaseId, String name) =>
-      (select(qrEntries)
-            ..where((t) => t.databaseId.equals(databaseId) & t.name.equals(name)))
+      (select(qrEntries)..where(
+            (t) => t.databaseId.equals(databaseId) & t.name.equals(name),
+          ))
           .getSingleOrNull();
+
+  /// 指定データベース内で名称が一致するエントリIDを取得する。
+  ///
+  /// BLOB 列を含む全カラムを読み込まず、軽量に存在確認を行う用途向け。
+  Future<String?> getEntryIdByNameInDatabase(
+    String databaseId,
+    String name,
+  ) async {
+    final row =
+        await (selectOnly(qrEntries)
+              ..addColumns([qrEntries.id])
+              ..where(
+                qrEntries.databaseId.equals(databaseId) &
+                    qrEntries.name.equals(name),
+              )
+              ..limit(1))
+            .getSingleOrNull();
+    if (row == null) return null;
+    return row.read(qrEntries.id);
+  }
+
+  /// 指定データベースのエントリ名とIDの対応表を取得する。
+  ///
+  /// インポート時の重複判定用に、BLOB列を含まない最小カラムのみを読み込む。
+  Future<Map<String, String>> getEntryNameIdMapByDatabase(
+    String databaseId,
+  ) async {
+    final rows =
+        await (selectOnly(qrEntries)
+              ..addColumns([qrEntries.id, qrEntries.name])
+              ..where(qrEntries.databaseId.equals(databaseId)))
+            .get();
+
+    final result = <String, String>{};
+    for (final row in rows) {
+      final id = row.read(qrEntries.id);
+      final name = row.read(qrEntries.name);
+      if (id == null || name == null || name.isEmpty) {
+        continue;
+      }
+      result.putIfAbsent(name, () => id);
+    }
+    return result;
+  }
 
   /// 指定データサイズに一致するエントリ一覧を返す（重複検出の前段フィルタ用）。
   Future<List<QrEntry>> getEntriesByDataSize(int size) =>
@@ -268,22 +329,122 @@ class QrEntryDao extends DatabaseAccessor<AppDatabase> with _$QrEntryDaoMixin {
     return rows.map((r) => r.readTable(qrEntries)).toList();
   }
 
+  /// 指定データベースの一覧表示向けエントリを取得する。
+  ///
+  /// `originalData` の BLOB 列を除外し、初期表示を軽量化する。
+  Future<List<QrEntry>> getEntrySummariesByDatabase(
+    String databaseId, {
+    bool? hasQrData,
+  }) async {
+    final query =
+        (selectOnly(qrEntries)
+              ..addColumns(_summaryColumns)
+              ..where(
+                qrEntries.databaseId.equals(databaseId) &
+                    _hasQrDataCondition(hasQrData),
+              )
+              ..orderBy([OrderingTerm.desc(qrEntries.updatedAt)]))
+            .get();
+    final rows = await query;
+    return rows.map(_toSummaryEntry).toList(growable: false);
+  }
+
+  /// 一覧向け軽量取得で使うカラム一覧。
+  List<GeneratedColumn<Object>> get _summaryColumns =>
+      <GeneratedColumn<Object>>[
+        qrEntries.id,
+        qrEntries.databaseId,
+        qrEntries.categoryId,
+        qrEntries.name,
+        qrEntries.description,
+        qrEntries.dataSize,
+        qrEntries.chunkCount,
+        qrEntries.isTextMode,
+        qrEntries.isFavorite,
+        qrEntries.thumbnail,
+        qrEntries.createdAt,
+        qrEntries.updatedAt,
+      ];
+
+  /// QR 登録状態フィルタの条件式を返す。
+  Expression<bool> _hasQrDataCondition(bool? hasQrData) {
+    if (hasQrData == true) {
+      return qrEntries.dataSize.isBiggerThanValue(0);
+    }
+    if (hasQrData == false) {
+      return qrEntries.dataSize.equals(0);
+    }
+    return const Constant(true);
+  }
+
+  /// 軽量クエリ結果を [QrEntry] へ変換する。
+  QrEntry _toSummaryEntry(TypedResult row) {
+    return QrEntry(
+      id: row.read(qrEntries.id)!,
+      databaseId: row.read(qrEntries.databaseId)!,
+      categoryId: row.read(qrEntries.categoryId),
+      name: row.read(qrEntries.name)!,
+      description: row.read(qrEntries.description)!,
+      originalData: Uint8List(0),
+      dataSize: row.read(qrEntries.dataSize)!,
+      chunkCount: row.read(qrEntries.chunkCount)!,
+      isTextMode: row.read(qrEntries.isTextMode)!,
+      isFavorite: row.read(qrEntries.isFavorite)!,
+      thumbnail: row.read(qrEntries.thumbnail),
+      createdAt: row.read(qrEntries.createdAt)!,
+      updatedAt: row.read(qrEntries.updatedAt)!,
+    );
+  }
+
   /// Get tags for a specific entry.
-  Future<List<Tag>> getTagsForEntry(String entryId) {
-    final query = select(tags).join([
-      innerJoin(entryTags, entryTags.tagId.equalsExp(tags.id)),
-    ])..where(entryTags.entryId.equals(entryId));
+  Future<List<Tag>> getTagsForEntry(String entryId) async {
+    final entry = await getEntryById(entryId);
+    if (entry == null) {
+      return const <Tag>[];
+    }
+
+    final query =
+        select(tags).join([
+          innerJoin(entryTags, entryTags.tagId.equalsExp(tags.id)),
+        ])..where(
+          entryTags.entryId.equals(entryId) &
+              tags.databaseId.equals(entry.databaseId),
+        );
 
     return query.map((r) => r.readTable(tags)).get();
   }
 
   /// Set tags for an entry (replaces existing).
   Future<void> setTagsForEntry(String entryId, List<String> tagIds) async {
+    final entry = await getEntryById(entryId);
+    if (entry == null) {
+      return;
+    }
+
     await (delete(entryTags)..where((t) => t.entryId.equals(entryId))).go();
+
+    if (tagIds.isEmpty) {
+      return;
+    }
+
+    final validTags =
+        await (select(tags)..where(
+              (t) => t.id.isIn(tagIds) & t.databaseId.equals(entry.databaseId),
+            ))
+            .get();
+    final validTagIds = validTags.map((tag) => tag.id).toSet();
+    final filteredTagIds = tagIds
+        .where(validTagIds.contains)
+        .toList(growable: false);
+
+    if (filteredTagIds.isEmpty) {
+      return;
+    }
+
     await batch((b) {
       b.insertAll(
         entryTags,
-        tagIds.map(
+        filteredTagIds.map(
           (tagId) => EntryTagsCompanion.insert(entryId: entryId, tagId: tagId),
         ),
       );

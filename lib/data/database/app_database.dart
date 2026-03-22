@@ -12,6 +12,22 @@ import 'tables/tags.dart';
 
 part 'app_database.g.dart';
 
+/// Web 版 drift が読み込む sqlite3.wasm の配置パス。
+const String driftSqliteWasmPath = 'sqlite3.wasm';
+
+/// Web 版 drift が利用するワーカースクリプトの配置パス。
+const String driftWorkerPath = 'drift_worker.js';
+
+/// drift の Web 初期化オプションを返す。
+///
+/// `drift_flutter` 0.2.8 以降では Web 実行時に `web` オプション指定が必須。
+DriftWebOptions createDriftWebOptions() {
+  return DriftWebOptions(
+    sqlite3Wasm: Uri.parse(driftSqliteWasmPath),
+    driftWorker: Uri.parse(driftWorkerPath),
+  );
+}
+
 /// アプリ全体で使用する drift データベース。
 ///
 /// [schemaVersion] を上げるたびに [migration] にマイグレーションを追加する。
@@ -71,6 +87,6 @@ class AppDatabase extends _$AppDatabase {
   }
 
   static QueryExecutor _openConnection() {
-    return driftDatabase(name: 'qr_code_app');
+    return driftDatabase(name: 'qr_code_app', web: createDriftWebOptions());
   }
 }

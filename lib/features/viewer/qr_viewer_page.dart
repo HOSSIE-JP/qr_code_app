@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:auto_route/auto_route.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../core/web/pwa_install_helper.dart';
 import '../../data/models/qr_entry_model.dart';
 import '../../providers/providers.dart';
 
@@ -24,7 +26,17 @@ class QrViewerPage extends ConsumerWidget {
     final entryAsync = ref.watch(qrEntryByIdProvider(entryId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('QRコード表示')),
+      appBar: AppBar(
+        title: const Text('QRコード表示'),
+        actions: [
+          if (kIsWeb)
+            IconButton(
+              tooltip: 'ホーム画面に追加',
+              icon: const Icon(Icons.add_to_home_screen),
+              onPressed: () => _installAsPwa(context),
+            ),
+        ],
+      ),
       body: entryAsync.when(
         data: (entry) {
           if (entry == null) {
@@ -34,6 +46,27 @@ class QrViewerPage extends ConsumerWidget {
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('エラー: $e')),
+      ),
+    );
+  }
+
+  /// Web 向けに PWA インストールダイアログを表示する。
+  Future<void> _installAsPwa(BuildContext context) async {
+    final prompted = await promptPwaInstall();
+    if (!context.mounted) {
+      return;
+    }
+
+    if (prompted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('ホーム画面への追加を開始しました')));
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('このブラウザでは自動追加できません。ブラウザメニューからホーム画面に追加してください。'),
       ),
     );
   }
@@ -186,7 +219,6 @@ class _QrViewerContentState extends ConsumerState<_QrViewerContent> {
             label: '${_qrSize.round()}px',
             onChanged: (v) {
               setState(() => _qrSize = v);
-              ref.read(qrViewerDefaultSizeProvider.notifier).setSize(v);
             },
           ),
         ],
@@ -206,7 +238,6 @@ class _QrViewerContentState extends ConsumerState<_QrViewerContent> {
       selected: isSelected,
       onSelected: (_) {
         setState(() => _qrSize = size);
-        ref.read(qrViewerDefaultSizeProvider.notifier).setSize(size);
       },
     );
   }

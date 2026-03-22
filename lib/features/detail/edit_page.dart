@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import '../../core/utils/qr_data_type_utils.dart';
 import '../../data/models/qr_entry_model.dart';
 import '../../providers/providers.dart';
 import '../../router/app_router.dart';
@@ -34,16 +33,37 @@ class _EditPageState extends ConsumerState<EditPage> {
   final _nameController = TextEditingController();
   final _descController = TextEditingController();
   final _tagController = TextEditingController();
+  late String _currentEntryId;
   List<String> _selectedTagIds = [];
   String? _selectedCategoryId;
   Uint8List? _thumbnail;
   bool _isTextMode = false;
   bool _isFavorite = false;
-  bool _initialized = false;
+  String? _initializedEntryId;
   bool _saving = false;
+  bool _hasUnsavedChanges = false;
+
+  String _initialName = '';
+  String _initialDescription = '';
+  Set<String> _initialTagIds = <String>{};
+  String? _initialCategoryId;
+  Uint8List? _initialThumbnail;
+  bool _initialIsTextMode = false;
+  bool _initialIsFavorite = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentEntryId = widget.entryId;
+    _nameController.addListener(_onTextEdited);
+    _descController.addListener(_onTextEdited);
+  }
 
   @override
   void dispose() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    _nameController.removeListener(_onTextEdited);
+    _descController.removeListener(_onTextEdited);
     _nameController.dispose();
     _descController.dispose();
     _tagController.dispose();
@@ -51,7 +71,7 @@ class _EditPageState extends ConsumerState<EditPage> {
   }
 
   void _initFromEntry(QrEntryModel entry) {
-    if (_initialized) return;
+    if (_initializedEntryId == entry.id) return;
     _nameController.text = entry.name;
     _descController.text = entry.description;
     _selectedTagIds = entry.tags.map((t) => t.id).toList();
@@ -59,194 +79,307 @@ class _EditPageState extends ConsumerState<EditPage> {
     _thumbnail = entry.thumbnail;
     _isTextMode = entry.isTextMode;
     _isFavorite = entry.isFavorite;
-    _initialized = true;
+
+    _initialName = entry.name;
+    _initialDescription = entry.description;
+    _initialTagIds = entry.tags.map((tag) => tag.id).toSet();
+    _initialCategoryId = entry.categoryId;
+    _initialThumbnail = entry.thumbnail;
+    _initialIsTextMode = entry.isTextMode;
+    _initialIsFavorite = entry.isFavorite;
+
+    _initializedEntryId = entry.id;
+    _hasUnsavedChanges = _calculateHasUnsavedChanges();
   }
 
   @override
   Widget build(BuildContext context) {
-    final entryAsync = ref.watch(qrEntryByIdProvider(widget.entryId));
+    final scopedIds = ref
+        .watch(qrEntriesProvider)
+        .maybeWhen(
+          data: (entries) => entries.map((entry) => entry.id).toList(),
+          orElse: () => <String>[],
+        );
+    final entryAsync = ref.watch(qrEntryByIdProvider(_currentEntryId));
     final allTagsAsync = ref.watch(allTagsProvider);
     final allCategoriesAsync = ref.watch(allCategoriesProvider);
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('編集'),
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : () => _save(ref),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('編集')),
       body: entryAsync.when(
         data: (entry) {
           if (entry == null) {
             return const Center(child: Text('エントリが見つかりません'));
           }
           _initFromEntry(entry);
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Thumbnail
-                Center(
-                  child: GestureDetector(
-                    onTap: _pickThumbnail,
-                    child: Container(
-                      width: 150,
-                      height: 150,
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
-                        ),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: _thumbnail != null
-                          ? Image.memory(_thumbnail!, fit: BoxFit.cover)
-                          : Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(
-                                  Icons.add_photo_alternate,
-                                  size: 40,
-                                  color: theme.colorScheme.onSurfaceVariant,
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              GestureDetector(
+                onHorizontalDragEnd: (details) {
+                  final velocity = details.primaryVelocity ?? 0;
+                  if (velocity.abs() < 300 || scopedIds.length <= 1) return;
+                  if (velocity < 0) {
+                    _moveToRelativeEntry(1, scopedIds);
+                  } else {
+                    _moveToRelativeEntry(-1, scopedIds);
+                  }
+                },
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 280),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Thumbnail + Favorite
+                      Center(
+                        child: GestureDetector(
+                          onTap: _pickThumbnail,
+                          child: Stack(
+                            children: [
+                              Container(
+                                width: 150,
+                                height: 150,
+                                decoration: BoxDecoration(
+                                  color:
+                                      theme.colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: theme.colorScheme.outlineVariant,
+                                  ),
                                 ),
-                                const SizedBox(height: 4),
-                                Text('サムネイル', style: theme.textTheme.bodySmall),
-                              ],
+                                clipBehavior: Clip.antiAlias,
+                                child: _thumbnail != null
+                                    ? Image.memory(
+                                        _thumbnail!,
+                                        fit: BoxFit.cover,
+                                      )
+                                    : Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.add_photo_alternate,
+                                            size: 40,
+                                            color: theme
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            'サムネイル',
+                                            style: theme.textTheme.bodySmall,
+                                          ),
+                                        ],
+                                      ),
+                              ),
+                              Positioned(
+                                right: 6,
+                                bottom: 6,
+                                child: IconButton.filled(
+                                  tooltip: _isFavorite ? 'お気に入り解除' : 'お気に入り',
+                                  onPressed: () {
+                                    setState(() {
+                                      _isFavorite = !_isFavorite;
+                                      _hasUnsavedChanges =
+                                          _calculateHasUnsavedChanges();
+                                    });
+                                  },
+                                  icon: Icon(
+                                    _isFavorite
+                                        ? Icons.favorite
+                                        : Icons.favorite_border,
+                                  ),
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: _isFavorite
+                                        ? Colors.red
+                                        : theme.colorScheme.surface,
+                                    foregroundColor: _isFavorite
+                                        ? Colors.white
+                                        : theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+
+                      TextField(
+                        controller: _nameController,
+                        decoration: const InputDecoration(labelText: '名称 *'),
+                      ),
+                      const SizedBox(height: 16),
+                      allCategoriesAsync.when(
+                        data: (categories) => DropdownButtonFormField<String?>(
+                          initialValue: _selectedCategoryId,
+                          decoration: const InputDecoration(labelText: 'カテゴリ'),
+                          items: [
+                            const DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text('未分類'),
                             ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                TextField(
-                  controller: _nameController,
-                  decoration: const InputDecoration(labelText: '名称 *'),
-                ),
-                const SizedBox(height: 16),
-                allCategoriesAsync.when(
-                  data: (categories) => DropdownButtonFormField<String?>(
-                    initialValue: _selectedCategoryId,
-                    decoration: const InputDecoration(labelText: 'カテゴリ'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('未分類'),
-                      ),
-                      for (final category in categories)
-                        DropdownMenuItem<String?>(
-                          value: category.id,
-                          child: Text(category.name),
+                            for (final category in categories)
+                              DropdownMenuItem<String?>(
+                                value: category.id,
+                                child: Text(category.name),
+                              ),
+                          ],
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedCategoryId = value;
+                              _hasUnsavedChanges =
+                                  _calculateHasUnsavedChanges();
+                            });
+                          },
                         ),
-                    ],
-                    onChanged: (value) {
-                      setState(() => _selectedCategoryId = value);
-                    },
-                  ),
-                  loading: () => const SizedBox.shrink(),
-                  error: (_, _) => const SizedBox.shrink(),
-                ),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                  title: const Text('お気に入り'),
-                  secondary: Icon(
-                    _isFavorite ? Icons.favorite : Icons.favorite_border,
-                    color: _isFavorite ? Colors.red : null,
-                  ),
-                  value: _isFavorite,
-                  onChanged: (v) => setState(() => _isFavorite = v),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _descController,
-                  decoration: const InputDecoration(
-                    labelText: '説明・メモ',
-                    alignLabelWithHint: true,
-                  ),
-                  maxLines: 5,
-                  minLines: 3,
-                ),
-                const SizedBox(height: 24),
-
-                // Tags section
-                Text('タグ', style: theme.textTheme.titleSmall),
-                const SizedBox(height: 8),
-                allTagsAsync.when(
-                  data: (tags) => TagChips(
-                    tags: tags,
-                    selectedTagIds: _selectedTagIds,
-                    selectable: true,
-                    onTagToggled: (tagId) {
-                      setState(() {
-                        if (_selectedTagIds.contains(tagId)) {
-                          _selectedTagIds.remove(tagId);
-                        } else {
-                          _selectedTagIds.add(tagId);
-                        }
-                      });
-                    },
-                  ),
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (_, e) => const Text('タグの読み込みに失敗しました'),
-                ),
-                const SizedBox(height: 12),
-                // Add new tag
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _tagController,
+                        loading: () => const SizedBox.shrink(),
+                        error: (_, _) => const SizedBox.shrink(),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _descController,
                         decoration: const InputDecoration(
-                          labelText: '新しいタグ',
-                          hintText: 'タグ名を入力',
-                          isDense: true,
+                          labelText: '説明・メモ',
+                          alignLabelWithHint: true,
                         ),
+                        maxLines: 5,
+                        minLines: 3,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton.filled(
-                      onPressed: _addTag,
-                      icon: const Icon(Icons.add),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                // QR データセクション
-                Text('QR データ', style: theme.textTheme.titleSmall),
-                const SizedBox(height: 8),
-                SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment<bool>(
-                      value: true,
-                      icon: Icon(Icons.text_fields),
-                      label: Text('テキスト'),
-                    ),
-                    ButtonSegment<bool>(
-                      value: false,
-                      icon: Icon(Icons.data_array),
-                      label: Text('バイナリ'),
-                    ),
-                  ],
-                  selected: <bool>{_isTextMode},
-                  onSelectionChanged: (values) {
-                    setState(() => _isTextMode = values.first);
-                  },
+                      Text('タグ', style: theme.textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      allTagsAsync.when(
+                        data: (tags) => TagChips(
+                          tags: tags,
+                          selectedTagIds: _selectedTagIds,
+                          selectable: true,
+                          maxHeight: 140,
+                          onTagToggled: (tagId) {
+                            setState(() {
+                              if (_selectedTagIds.contains(tagId)) {
+                                _selectedTagIds.remove(tagId);
+                              } else {
+                                _selectedTagIds.add(tagId);
+                              }
+                              _hasUnsavedChanges =
+                                  _calculateHasUnsavedChanges();
+                            });
+                          },
+                        ),
+                        loading: () =>
+                            const Center(child: CircularProgressIndicator()),
+                        error: (_, e) => const Text('タグの読み込みに失敗しました'),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _tagController,
+                              decoration: const InputDecoration(
+                                labelText: '新しいタグ',
+                                hintText: 'タグ名を入力',
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filled(
+                            onPressed: _addTag,
+                            icon: const Icon(Icons.add),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+
+                      Text('QR データ形式', style: theme.textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      SegmentedButton<bool>(
+                        segments: const [
+                          ButtonSegment<bool>(
+                            value: true,
+                            icon: Icon(Icons.text_fields),
+                            label: Text('テキスト'),
+                          ),
+                          ButtonSegment<bool>(
+                            value: false,
+                            icon: Icon(Icons.data_array),
+                            label: Text('バイナリ'),
+                          ),
+                        ],
+                        selected: <bool>{_isTextMode},
+                        onSelectionChanged: (values) {
+                          setState(() {
+                            _isTextMode = values.first;
+                            _hasUnsavedChanges = _calculateHasUnsavedChanges();
+                          });
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 8),
-                _buildQrDataSection(entry, theme),
+              ),
+              if (scopedIds.length > 1) ...[
+                _buildEdgeNavButton(
+                  icon: Icons.chevron_left,
+                  tooltip: '前のQRへ',
+                  alignment: Alignment.centerLeft,
+                  onPressed: () => _moveToRelativeEntry(-1, scopedIds),
+                ),
+                _buildEdgeNavButton(
+                  icon: Icons.chevron_right,
+                  tooltip: '次のQRへ',
+                  alignment: Alignment.centerRight,
+                  onPressed: () => _moveToRelativeEntry(1, scopedIds),
+                ),
               ],
-            ),
+            ],
           );
         },
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => Center(child: Text('エラー: $error')),
+      ),
+      bottomNavigationBar: entryAsync.maybeWhen(
+        data: (entry) {
+          if (entry == null) return const SizedBox.shrink();
+          return SafeArea(
+            top: false,
+            child: Container(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                border: Border(
+                  top: BorderSide(color: theme.colorScheme.outlineVariant),
+                ),
+              ),
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildQrDataSection(entry, theme),
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    onPressed: (!_saving && _hasUnsavedChanges)
+                        ? () => _save(ref)
+                        : null,
+                    icon: _saving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save),
+                    label: const Text('保存'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+        orElse: () => const SizedBox.shrink(),
       ),
     );
   }
@@ -373,20 +506,15 @@ class _EditPageState extends ConsumerState<EditPage> {
 
     if (scannedData == null || !mounted) return;
 
-    final detectedTextMode = QrDataTypeUtils.inferIsTextMode(scannedData);
-    final selectedTextMode = await _askDataType(initialValue: detectedTextMode);
-    if (selectedTextMode == null || !mounted) return;
-
     try {
       await ref
           .read(qrRepositoryProvider)
           .updateQrData(
             id: entry.id,
             data: scannedData,
-            isTextMode: selectedTextMode,
+            isTextMode: _isTextMode,
           );
-      setState(() => _isTextMode = selectedTextMode);
-      ref.invalidate(qrEntryByIdProvider(widget.entryId));
+      ref.invalidate(qrEntryByIdProvider(_currentEntryId));
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -473,7 +601,7 @@ class _EditPageState extends ConsumerState<EditPage> {
 
     try {
       await ref.read(qrRepositoryProvider).clearQrData(entryId);
-      ref.invalidate(qrEntryByIdProvider(widget.entryId));
+      ref.invalidate(qrEntryByIdProvider(_currentEntryId));
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
@@ -517,7 +645,10 @@ class _EditPageState extends ConsumerState<EditPage> {
                 ),
                 title: const Text('サムネイルを削除'),
                 onTap: () {
-                  setState(() => _thumbnail = null);
+                  setState(() {
+                    _thumbnail = null;
+                    _hasUnsavedChanges = _calculateHasUnsavedChanges();
+                  });
                   Navigator.pop(context);
                 },
               ),
@@ -540,7 +671,10 @@ class _EditPageState extends ConsumerState<EditPage> {
       ThumbnailCropRoute(imageBytes: bytes),
     );
     if (cropped != null) {
-      setState(() => _thumbnail = cropped);
+      setState(() {
+        _thumbnail = cropped;
+        _hasUnsavedChanges = _calculateHasUnsavedChanges();
+      });
     }
   }
 
@@ -555,6 +689,7 @@ class _EditPageState extends ConsumerState<EditPage> {
       if (!_selectedTagIds.contains(tag.id)) {
         _selectedTagIds.add(tag.id);
       }
+      _hasUnsavedChanges = _calculateHasUnsavedChanges();
     });
     _tagController.clear();
     ref.invalidate(allTagsProvider);
@@ -574,7 +709,7 @@ class _EditPageState extends ConsumerState<EditPage> {
       await ref
           .read(qrRepositoryProvider)
           .updateEntry(
-            id: widget.entryId,
+            id: _currentEntryId,
             name: name,
             description: _descController.text.trim(),
             isTextMode: _isTextMode,
@@ -585,7 +720,7 @@ class _EditPageState extends ConsumerState<EditPage> {
             tagIds: _selectedTagIds,
           );
       if (!mounted) return;
-      ref.invalidate(qrEntryByIdProvider(widget.entryId));
+      ref.invalidate(qrEntryByIdProvider(_currentEntryId));
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('保存しました')));
@@ -600,48 +735,107 @@ class _EditPageState extends ConsumerState<EditPage> {
     }
   }
 
-  /// 読み取ったデータの形式（テキスト/バイナリ）をユーザーに確認させる。
-  Future<bool?> _askDataType({required bool initialValue}) async {
-    var selected = initialValue;
-    return showDialog<bool>(
+  /// 前後エントリへ循環移動する。
+  Future<void> _moveToRelativeEntry(int delta, List<String> scopedIds) async {
+    if (scopedIds.isEmpty) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (_hasUnsavedChanges) {
+      final shouldDiscard = await _confirmDiscardChanges();
+      if (!shouldDiscard) {
+        return;
+      }
+    }
+
+    final currentIndex = scopedIds.indexOf(_currentEntryId);
+    final baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    final nextIndex = (baseIndex + delta) % scopedIds.length;
+    final normalizedIndex = nextIndex < 0
+        ? nextIndex + scopedIds.length
+        : nextIndex;
+    setState(() {
+      _currentEntryId = scopedIds[normalizedIndex];
+      _initializedEntryId = null;
+      _hasUnsavedChanges = false;
+    });
+  }
+
+  /// 未保存変更がある状態でエントリ遷移する際の確認ダイアログを表示する。
+  Future<bool> _confirmDiscardChanges() async {
+    final result = await showDialog<bool>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              title: const Text('データ形式を選択'),
-              content: SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment<bool>(
-                    value: true,
-                    icon: Icon(Icons.text_fields),
-                    label: Text('テキスト'),
-                  ),
-                  ButtonSegment<bool>(
-                    value: false,
-                    icon: Icon(Icons.data_array),
-                    label: Text('バイナリ'),
-                  ),
-                ],
-                selected: <bool>{selected},
-                onSelectionChanged: (values) {
-                  setLocalState(() => selected = values.first);
-                },
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('キャンセル'),
-                ),
-                FilledButton(
-                  onPressed: () => Navigator.of(context).pop(selected),
-                  child: const Text('適用'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (context) => AlertDialog(
+        title: const Text('未保存の変更があります'),
+        content: const Text('保存していない編集内容は破棄されます。別のQRデータへ移動しますか？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('キャンセル'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('破棄して移動'),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  /// テキスト入力変更時に未保存状態を更新する。
+  void _onTextEdited() {
+    final hasChanges = _calculateHasUnsavedChanges();
+    if (hasChanges == _hasUnsavedChanges || !mounted) return;
+    setState(() {
+      _hasUnsavedChanges = hasChanges;
+    });
+  }
+
+  /// 現在フォーム値と初期値を比較し、未保存変更があるかを返す。
+  bool _calculateHasUnsavedChanges() {
+    if (_initializedEntryId == null) return false;
+
+    final currentTagIds = _selectedTagIds.toSet();
+    final nameChanged = _nameController.text.trim() != _initialName.trim();
+    final descriptionChanged =
+        _descController.text.trim() != _initialDescription.trim();
+    final categoryChanged = _selectedCategoryId != _initialCategoryId;
+    final tagsChanged = !setEquals(currentTagIds, _initialTagIds);
+    final thumbnailChanged = !listEquals(_thumbnail, _initialThumbnail);
+    final textModeChanged = _isTextMode != _initialIsTextMode;
+    final favoriteChanged = _isFavorite != _initialIsFavorite;
+
+    return nameChanged ||
+        descriptionChanged ||
+        categoryChanged ||
+        tagsChanged ||
+        thumbnailChanged ||
+        textModeChanged ||
+        favoriteChanged;
+  }
+
+  /// 画面中央左右のフローティング遷移ボタン。
+  Widget _buildEdgeNavButton({
+    required IconData icon,
+    required String tooltip,
+    required Alignment alignment,
+    required VoidCallback onPressed,
+  }) {
+    return Align(
+      alignment: alignment,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.9),
+            shape: BoxShape.circle,
+          ),
+          child: IconButton(
+            tooltip: tooltip,
+            onPressed: onPressed,
+            icon: Icon(icon),
+          ),
+        ),
+      ),
     );
   }
 }

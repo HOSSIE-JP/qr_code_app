@@ -19,6 +19,7 @@ class SettingsPage extends ConsumerWidget {
     final databasesAsync = ref.watch(allDatabasesProvider);
     final tagsAsync = ref.watch(allTagsProvider);
     final categoriesAsync = ref.watch(allCategoriesProvider);
+    final appVersionLabelAsync = ref.watch(appVersionLabelProvider);
     final currentDbId = ref.watch(currentDatabaseIdProvider);
 
     return Scaffold(
@@ -94,10 +95,14 @@ class SettingsPage extends ConsumerWidget {
 
           // --- アプリ情報 ---
           const _SectionHeader(title: 'アプリ情報'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('バージョン'),
-            subtitle: Text('1.0.0'),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('バージョン'),
+            subtitle: appVersionLabelAsync.when(
+              data: (value) => Text(value),
+              loading: () => const Text('読み込み中...'),
+              error: (_, _) => const Text('不明'),
+            ),
           ),
           const ListTile(
             leading: Icon(Icons.qr_code_2),

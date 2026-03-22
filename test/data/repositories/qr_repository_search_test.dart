@@ -50,5 +50,26 @@ void main() {
         '未登録エントリ',
       });
     });
+
+    test('一覧向け検索は軽量モデルで返し originalData を読み込まない', () async {
+      final database = await qrRepository.createDatabase(name: '軽量検索DB');
+      await qrRepository.createEntry(
+        name: '軽量対象',
+        description: '説明',
+        data: Uint8List.fromList(List<int>.filled(2048, 7)),
+        chunkCount: 1,
+        databaseId: database.id,
+      );
+
+      final results = await qrRepository.searchSummaries(
+        textQuery: null,
+        tagIds: const [],
+        databaseId: database.id,
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.name, '軽量対象');
+      expect(results.single.originalData, isEmpty);
+    });
   });
 }

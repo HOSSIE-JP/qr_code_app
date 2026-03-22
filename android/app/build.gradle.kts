@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -5,10 +8,36 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val localProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        FileInputStream(localPropertiesFile).use(::load)
+    }
+}
+
+val signingProperties = Properties()
+val signingPropertiesPath = localProperties.getProperty("priqr.signing.properties")
+val signingPropertiesFile = signingPropertiesPath?.let(::file)
+val hasReleaseSigning = signingPropertiesFile?.isFile == true
+
+if (hasReleaseSigning) {
+    FileInputStream(signingPropertiesFile!!).use(signingProperties::load)
+} else {
+    logger.warn(
+        "Release signing is not configured. Set priqr.signing.properties in android/local.properties to build a signed release.",
+    )
+}
+
 android {
     namespace = "jp.co.geroneko"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
+    packaging {
+        resources {
+            excludes += "META-INF/DEPENDENCIES"
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -17,6 +46,22 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                val storeFilePath = signingProperties.getProperty("storeFile")
+                    ?: error("storeFile is missing in signing properties.")
+                storeFile = file(storeFilePath)
+                storePassword = signingProperties.getProperty("storePassword")
+                    ?: error("storePassword is missing in signing properties.")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                    ?: error("keyAlias is missing in signing properties.")
+                keyPassword = signingProperties.getProperty("keyPassword")
+                    ?: error("keyPassword is missing in signing properties.")
+            }
+        }
     }
 
     defaultConfig {
@@ -28,13 +73,15 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["msalRedirectHost"] = "jp.co.geroneko"
+        manifestPlaceholders["msalRedirectPath"] = "/zzvXMUAcU3YjMd0QbTOeRb7g8dY="
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }

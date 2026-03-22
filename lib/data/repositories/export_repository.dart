@@ -3,11 +3,73 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:path_provider/path_provider.dart';
 
-import '../models/qr_entry_model.dart';
 import 'qr_repository.dart';
 import 'tag_repository.dart';
+
+/// Import/Export 処理の進捗通知コールバック。
+typedef ImportExportProgressCallback =
+    void Function(ImportExportProgress progress);
+
+/// Import/Export の処理段階。
+enum ImportExportProcessPhase {
+  preparing,
+  readingArchive,
+  processingCategories,
+  processingTags,
+  processingEntries,
+  writingFile,
+  completed,
+  cancelled,
+}
+
+/// Import/Export の進捗スナップショット。
+class ImportExportProgress {
+  const ImportExportProgress({
+    required this.phase,
+    required this.processed,
+    required this.total,
+    required this.message,
+  });
+
+  final ImportExportProcessPhase phase;
+  final int processed;
+  final int total;
+  final String message;
+
+  /// 進捗割合。総数不明時は null。
+  double? get fraction {
+    if (total <= 0) return null;
+    return (processed / total).clamp(0, 1).toDouble();
+  }
+}
+
+/// Import/Export のキャンセル要求を共有するトークン。
+class ImportExportCancellationToken {
+  bool _isCancellationRequested = false;
+
+  bool get isCancellationRequested => _isCancellationRequested;
+
+  void requestCancel() {
+    _isCancellationRequested = true;
+  }
+
+  void throwIfCancellationRequested() {
+    if (_isCancellationRequested) {
+      throw const ImportExportCanceledException();
+    }
+  }
+}
+
+/// Import/Export 処理のキャンセル例外。
+class ImportExportCanceledException implements Exception {
+  const ImportExportCanceledException();
+
+  @override
+  String toString() => 'Import/Export 処理がキャンセルされました。';
+}
 
 /// エントリとタグのエクスポート・インポートを行うリポジトリ。
 ///
@@ -26,18 +88,34 @@ class ExportRepository {
   Future<String> exportAsZip({
     List<String>? entryIds,
     String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
   }) async {
-    final entries = entryIds != null
-        ? await Future.wait(
-            entryIds.map((id) => _qrRepo.getEntryById(id)),
-          ).then((list) => list.whereType<QrEntryModel>().toList())
-        : await _qrRepo.getAllEntries(databaseId: databaseId);
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.preparing,
+      processed: 0,
+      total: 0,
+      message: 'エクスポート準備中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
+
+    final allEntries = await _qrRepo.getAllEntries(databaseId: databaseId);
+    final selectedIdSet = entryIds?.toSet();
+    final entries = selectedIdSet == null
+        ? allEntries
+        : allEntries
+              .where((entry) => selectedIdSet.contains(entry.id))
+              .toList();
 
     final targetDatabaseId = databaseId ?? 'default';
     final tags = await _tagRepo.getAllTags(databaseId: targetDatabaseId);
     final categories = await _qrRepo.getCategoriesByDatabase(targetDatabaseId);
+    cancellationToken?.throwIfCancellationRequested();
 
     final archive = Archive();
+    final total = entries.length + 4;
+    var processed = 0;
 
     // Add metadata JSON
     final metadata = {
@@ -50,12 +128,30 @@ class ExportRepository {
     archive.addFile(
       ArchiveFile.bytes('metadata.json', utf8.encode(jsonEncode(metadata))),
     );
+    processed++;
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.processingEntries,
+      processed: processed,
+      total: total,
+      message: 'メタデータを作成中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
 
     // Add tags JSON
     final tagsJson = tags.map((t) => t.toJson()).toList();
     archive.addFile(
       ArchiveFile.bytes('tags.json', utf8.encode(jsonEncode(tagsJson))),
     );
+    processed++;
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.processingTags,
+      processed: processed,
+      total: total,
+      message: 'タグ情報を作成中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
 
     // Add categories JSON
     final categoriesJson = categories.map((c) => c.toJson()).toList();
@@ -65,10 +161,21 @@ class ExportRepository {
         utf8.encode(jsonEncode(categoriesJson)),
       ),
     );
+    processed++;
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.processingCategories,
+      processed: processed,
+      total: total,
+      message: 'カテゴリ情報を作成中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
 
     // Add entries
     final entriesJson = <Map<String, dynamic>>[];
-    for (final entry in entries) {
+    for (var index = 0; index < entries.length; index++) {
+      cancellationToken?.throwIfCancellationRequested();
+      final entry = entries[index];
       final entryMap = entry.toJson();
       // Remove binary data from JSON (stored separately)
       entryMap.remove('originalData');
@@ -85,18 +192,43 @@ class ExportRepository {
           ArchiveFile.bytes('thumbnails/${entry.id}.png', entry.thumbnail!),
         );
       }
+
+      _emitProgress(
+        onProgress,
+        phase: ImportExportProcessPhase.processingEntries,
+        processed: processed + index + 1,
+        total: total,
+        message: 'エントリをエクスポート中 (${index + 1}/${entries.length})',
+      );
     }
 
     archive.addFile(
       ArchiveFile.bytes('entries.json', utf8.encode(jsonEncode(entriesJson))),
     );
+    processed += entries.length;
+    cancellationToken?.throwIfCancellationRequested();
 
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.writingFile,
+      processed: processed,
+      total: total,
+      message: 'ZIPファイルを生成中',
+    );
     final zipData = ZipEncoder().encode(archive);
 
     final dir = await getApplicationDocumentsDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final filePath = '${dir.path}/qr_export_$timestamp.qrdb';
     await File(filePath).writeAsBytes(zipData);
+
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.completed,
+      processed: total,
+      total: total,
+      message: 'エクスポート完了',
+    );
 
     return filePath;
   }
@@ -106,16 +238,31 @@ class ExportRepository {
   Future<String> exportAsJson({
     List<String>? entryIds,
     String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
   }) async {
-    final entries = entryIds != null
-        ? await Future.wait(
-            entryIds.map((id) => _qrRepo.getEntryById(id)),
-          ).then((list) => list.whereType<QrEntryModel>().toList())
-        : await _qrRepo.getAllEntries(databaseId: databaseId);
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.preparing,
+      processed: 0,
+      total: 0,
+      message: 'エクスポート準備中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
+
+    final allEntries = await _qrRepo.getAllEntries(databaseId: databaseId);
+    final selectedIdSet = entryIds?.toSet();
+    final entries = selectedIdSet == null
+        ? allEntries
+        : allEntries
+              .where((entry) => selectedIdSet.contains(entry.id))
+              .toList();
 
     final targetDatabaseId = databaseId ?? 'default';
     final tags = await _tagRepo.getAllTags(databaseId: targetDatabaseId);
     final categories = await _qrRepo.getCategoriesByDatabase(targetDatabaseId);
+    cancellationToken?.throwIfCancellationRequested();
+    final total = entries.length + 3;
 
     final exportData = {
       'version': 2,
@@ -125,10 +272,34 @@ class ExportRepository {
       'entries': entries.map((e) => e.toJson()).toList(),
     };
 
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.processingEntries,
+      processed: entries.length,
+      total: total,
+      message: 'JSONデータを組み立て中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
+
     final dir = await getApplicationDocumentsDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final filePath = '${dir.path}/qr_export_$timestamp.qrjson';
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.writingFile,
+      processed: total - 1,
+      total: total,
+      message: 'JSONファイルを書き込み中',
+    );
     await File(filePath).writeAsString(jsonEncode(exportData));
+
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.completed,
+      processed: total,
+      total: total,
+      message: 'エクスポート完了',
+    );
 
     return filePath;
   }
@@ -136,169 +307,407 @@ class ExportRepository {
   /// ZIP ファイルからエントリをインポートする。
   /// [databaseId] を指定すると、インポート先のデータベースを明示する。
   /// インポート件数を返す。
-  Future<int> importFromZip(Uint8List zipBytes, {String? databaseId}) async {
-    final archive = ZipDecoder().decodeBytes(zipBytes);
-    var importedCount = 0;
-    final targetDatabaseId = databaseId ?? 'default';
+  Future<int> importFromZip(
+    Uint8List zipBytes, {
+    String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
+  }) async {
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.readingArchive,
+      processed: 0,
+      total: 0,
+      message: 'ZIPを展開中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
 
-    // Read categories
-    final categoryIdMap = <String, String>{};
-    final categoriesFile = archive.findFile('categories.json');
-    if (categoriesFile != null) {
-      final categoriesJson =
-          jsonDecode(utf8.decode(categoriesFile.content as List<int>)) as List;
+    final archive = ZipDecoder().decodeBytes(
+      zipBytes,
+      callback: (_) {
+        cancellationToken?.throwIfCancellationRequested();
+      },
+    );
+    return _importFromArchive(
+      archive,
+      databaseId: databaseId,
+      onProgress: onProgress,
+      cancellationToken: cancellationToken,
+    );
+  }
+
+  /// ZIP ファイルパスからエントリをインポートする。
+  ///
+  /// ローカルファイルをストリームで読み込むため、巨大な ZIP でも
+  /// `readAsBytes()` よりメモリピークを抑えられる。
+  Future<int> importFromZipFile(
+    String zipFilePath, {
+    String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
+  }) async {
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.readingArchive,
+      processed: 0,
+      total: 0,
+      message: 'ZIPを展開中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
+
+    final input = InputFileStream(zipFilePath);
+    try {
+      final archive = ZipDecoder().decodeStream(
+        input,
+        callback: (_) {
+          cancellationToken?.throwIfCancellationRequested();
+        },
+      );
+      return _importFromArchive(
+        archive,
+        databaseId: databaseId,
+        onProgress: onProgress,
+        cancellationToken: cancellationToken,
+      );
+    } finally {
+      input.close();
+    }
+  }
+
+  Future<int> _importFromArchive(
+    Archive archive, {
+    String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
+  }) async {
+    return _qrRepo.runInTransaction(() async {
+      var importedCount = 0;
+      final targetDatabaseId = databaseId ?? 'default';
+      final archiveFileByName = <String, ArchiveFile>{
+        for (final file in archive.files) file.name: file,
+      };
+      final categoriesFile = archiveFileByName['categories.json'];
+      final tagsFile = archiveFileByName['tags.json'];
+      final entriesFile = archiveFileByName['entries.json'];
+
+      final categoriesJson = categoriesFile != null
+          ? jsonDecode(utf8.decode(categoriesFile.content as List<int>)) as List
+          : const <dynamic>[];
+      final tagsJson = tagsFile != null
+          ? jsonDecode(utf8.decode(tagsFile.content as List<int>)) as List
+          : const <dynamic>[];
+      if (entriesFile == null) return 0;
+      final entriesJson =
+          jsonDecode(utf8.decode(entriesFile.content as List<int>)) as List;
+
+      final total =
+          categoriesJson.length + tagsJson.length + entriesJson.length;
+      var processed = 0;
+
+      final existingCategories = await _qrRepo.getCategoriesByDatabase(
+        targetDatabaseId,
+      );
+      final categoryNameMap = {
+        for (final category in existingCategories) category.name: category,
+      };
+
+      final existingTags = await _tagRepo.getAllTags(
+        databaseId: targetDatabaseId,
+      );
+      final tagNameMap = {for (final tag in existingTags) tag.name: tag};
+
+      final existingEntryIdByName = await _qrRepo.getEntryNameIdMapByDatabase(
+        targetDatabaseId,
+      );
+      cancellationToken?.throwIfCancellationRequested();
+
+      // Read categories
+      final categoryIdMap = <String, String>{};
       for (final categoryJson in categoriesJson) {
+        await _cooperativeCheckpoint(cancellationToken, processed: processed);
         final map = (categoryJson as Map).cast<String, dynamic>();
         final oldCategoryId = map['id'] as String?;
-        final created = await _upsertCategory(
-          name: map['name'] as String,
-          databaseId: targetDatabaseId,
-        );
+        final name = map['name'] as String;
+        final category =
+            categoryNameMap[name] ??
+            await _qrRepo.createCategory(
+              name: name,
+              databaseId: targetDatabaseId,
+            );
+        categoryNameMap[name] = category;
         if (oldCategoryId != null && oldCategoryId.isNotEmpty) {
-          categoryIdMap[oldCategoryId] = created.id;
+          categoryIdMap[oldCategoryId] = category.id;
         }
+        processed++;
+        _emitProgress(
+          onProgress,
+          phase: ImportExportProcessPhase.processingCategories,
+          processed: processed,
+          total: total,
+          message: 'カテゴリをインポート中 ($processed/$total)',
+        );
       }
-    }
 
-    // Read tags
-    final tagIdMap = <String, String>{};
-    final tagsFile = archive.findFile('tags.json');
-    if (tagsFile != null) {
-      final tagsJson =
-          jsonDecode(utf8.decode(tagsFile.content as List<int>)) as List;
+      // Read tags
+      final tagIdMap = <String, String>{};
       for (final tagJson in tagsJson) {
+        await _cooperativeCheckpoint(cancellationToken, processed: processed);
         final map = (tagJson as Map).cast<String, dynamic>();
         final oldTagId = map['id'] as String?;
-        final created = await _tagRepo.createTag(
-          name: map['name'] as String,
-          color: map['color'] as int?,
-          databaseId: targetDatabaseId,
-        );
+        final name = map['name'] as String;
+        final tag =
+            tagNameMap[name] ??
+            await _tagRepo.createTag(
+              name: name,
+              color: map['color'] as int?,
+              databaseId: targetDatabaseId,
+            );
+        tagNameMap[name] = tag;
         if (oldTagId != null && oldTagId.isNotEmpty) {
-          tagIdMap[oldTagId] = created.id;
+          tagIdMap[oldTagId] = tag.id;
+        }
+        processed++;
+        _emitProgress(
+          onProgress,
+          phase: ImportExportProcessPhase.processingTags,
+          processed: processed,
+          total: total,
+          message: 'タグをインポート中 ($processed/$total)',
+        );
+      }
+
+      // Read entries
+      for (final entryJson in entriesJson) {
+        await _cooperativeCheckpoint(cancellationToken, processed: processed);
+        final map = (entryJson as Map).cast<String, dynamic>();
+        final id = map['id'] as String;
+        final entryName = map['name'] as String;
+
+        final existingId = existingEntryIdByName[entryName];
+
+        // Get binary data
+        final dataFile = archiveFileByName['data/$id.bin'];
+        if (dataFile == null) continue;
+
+        final thumbnailFile = archiveFileByName['thumbnails/$id.png'];
+
+        final originalTagIds = _extractTagIds(map['tags']);
+        final tagIds = originalTagIds
+            .map((id) => tagIdMap[id])
+            .whereType<String>()
+            .toList(growable: false);
+
+        final resolvedCategoryId = _resolveCategoryId(
+          rawCategoryId: map['categoryId'],
+          categoryIdMap: categoryIdMap,
+        );
+
+        final importDescription = (map['description'] as String?) ?? '';
+        final importData = _asUint8List(dataFile.content);
+        final importThumbnail = thumbnailFile != null
+            ? _asUint8List(thumbnailFile.content)
+            : null;
+
+        if (existingId == null) {
+          final created = await _qrRepo.createEntry(
+            name: entryName,
+            description: importDescription,
+            data: importData,
+            chunkCount: (map['chunkCount'] as int?) ?? 1,
+            isTextMode: (map['isTextMode'] as bool?) ?? false,
+            isFavorite: (map['isFavorite'] as bool?) ?? false,
+            thumbnail: importThumbnail,
+            tagIds: tagIds,
+            databaseId: targetDatabaseId,
+            categoryId: resolvedCategoryId,
+          );
+          existingEntryIdByName[entryName] = created.id;
+        } else {
+          await _qrRepo.overwriteEntryFromImport(
+            id: existingId,
+            name: entryName,
+            description: importDescription,
+            data: importData,
+            chunkCount: (map['chunkCount'] as int?) ?? 1,
+            isTextMode: (map['isTextMode'] as bool?) ?? false,
+            isFavorite: (map['isFavorite'] as bool?) ?? false,
+            thumbnail: importThumbnail,
+            categoryId: resolvedCategoryId,
+            tagIds: tagIds,
+          );
+        }
+
+        importedCount++;
+        processed++;
+        if (_shouldEmitEntryProgress(importedCount, entriesJson.length)) {
+          _emitProgress(
+            onProgress,
+            phase: ImportExportProcessPhase.processingEntries,
+            processed: processed,
+            total: total,
+            message: 'エントリをインポート中 ($importedCount/${entriesJson.length})',
+          );
         }
       }
-    }
 
-    // Read entries
-    final entriesFile = archive.findFile('entries.json');
-    if (entriesFile == null) return 0;
-
-    final entriesJson =
-        jsonDecode(utf8.decode(entriesFile.content as List<int>)) as List;
-
-    for (final entryJson in entriesJson) {
-      final map = (entryJson as Map).cast<String, dynamic>();
-      final id = map['id'] as String;
-
-      final existing = await _qrRepo.getEntryByName(
-        databaseId: targetDatabaseId,
-        name: map['name'] as String,
+      _emitProgress(
+        onProgress,
+        phase: ImportExportProcessPhase.completed,
+        processed: total,
+        total: total,
+        message: 'インポート完了',
       );
 
-      // Get binary data
-      final dataFile = archive.findFile('data/$id.bin');
-      if (dataFile == null) continue;
+      return importedCount;
+    });
+  }
 
-      final thumbnailFile = archive.findFile('thumbnails/$id.png');
-
-      final originalTagIds = _extractTagIds(map['tags']);
-      final tagIds = originalTagIds
-          .map((id) => tagIdMap[id] ?? id)
-          .toList(growable: false);
-
-      final resolvedCategoryId = _resolveCategoryId(
-        rawCategoryId: map['categoryId'],
-        categoryIdMap: categoryIdMap,
-      );
-
-      final importDescription = (map['description'] as String?) ?? '';
-      final importData = Uint8List.fromList(dataFile.content as List<int>);
-      final importThumbnail = thumbnailFile != null
-          ? Uint8List.fromList(thumbnailFile.content as List<int>)
-          : null;
-
-      if (existing == null) {
-        await _qrRepo.createEntry(
-          name: map['name'] as String,
-          description: importDescription,
-          data: importData,
-          chunkCount: (map['chunkCount'] as int?) ?? 1,
-          isTextMode: (map['isTextMode'] as bool?) ?? false,
-          isFavorite: (map['isFavorite'] as bool?) ?? false,
-          thumbnail: importThumbnail,
-          tagIds: tagIds,
-          databaseId: targetDatabaseId,
-          categoryId: resolvedCategoryId,
-        );
-      } else {
-        await _qrRepo.overwriteEntryFromImport(
-          id: existing.id,
-          name: map['name'] as String,
-          description: importDescription,
-          data: importData,
-          chunkCount: (map['chunkCount'] as int?) ?? 1,
-          isTextMode: (map['isTextMode'] as bool?) ?? false,
-          isFavorite: (map['isFavorite'] as bool?) ?? false,
-          thumbnail: importThumbnail,
-          categoryId: resolvedCategoryId,
-          tagIds: tagIds,
-        );
-      }
-
-      importedCount++;
+  /// Archive のファイル内容を Uint8List として返す。
+  ///
+  /// すでに Uint8List の場合はコピーを避け、そのまま利用する。
+  Uint8List _asUint8List(Object? content) {
+    if (content is Uint8List) {
+      return content;
     }
+    if (content is List<int>) {
+      return Uint8List.fromList(content);
+    }
+    throw StateError('ZIP 内のデータ形式が不正です。');
+  }
 
-    return importedCount;
+  /// キャンセル要求を取りこぼさないための協調チェックポイント。
+  ///
+  /// 一定件数ごとにイベントループへ制御を戻し、UI 側のキャンセル入力を処理できるようにする。
+  Future<void> _cooperativeCheckpoint(
+    ImportExportCancellationToken? cancellationToken, {
+    required int processed,
+  }) async {
+    cancellationToken?.throwIfCancellationRequested();
+    if (processed > 0 && processed % 8 == 0) {
+      await Future<void>.delayed(Duration.zero);
+      cancellationToken?.throwIfCancellationRequested();
+    }
+  }
+
+  /// エントリ処理の進捗通知間隔を調整する。
+  ///
+  /// 通知頻度を抑えることで、進捗UI更新に伴う再描画コストを低減する。
+  bool _shouldEmitEntryProgress(int importedCount, int totalEntries) {
+    if (importedCount == totalEntries) return true;
+    if (importedCount <= 3) return true;
+    return importedCount % 8 == 0;
   }
 
   /// JSON 文字列からエントリをインポートする。
   /// [databaseId] を指定すると、インポート先のデータベースを明示する。
   /// インポート件数を返す。
-  Future<int> importFromJson(String jsonString, {String? databaseId}) async {
+  Future<int> importFromJson(
+    String jsonString, {
+    String? databaseId,
+    ImportExportProgressCallback? onProgress,
+    ImportExportCancellationToken? cancellationToken,
+  }) async {
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.preparing,
+      processed: 0,
+      total: 0,
+      message: 'JSONを解析中',
+    );
+    cancellationToken?.throwIfCancellationRequested();
+
     final data = jsonDecode(jsonString) as Map<String, dynamic>;
     var importedCount = 0;
     final targetDatabaseId = databaseId ?? 'default';
+    final categoriesJson = data['categories'] as List? ?? [];
+    final tagsJson = data['tags'] as List? ?? [];
+    final entriesJson = data['entries'] as List? ?? [];
+    final total = categoriesJson.length + tagsJson.length + entriesJson.length;
+    var processed = 0;
+
+    final existingCategories = await _qrRepo.getCategoriesByDatabase(
+      targetDatabaseId,
+    );
+    final categoryNameMap = {
+      for (final category in existingCategories) category.name: category,
+    };
+
+    final existingTags = await _tagRepo.getAllTags(
+      databaseId: targetDatabaseId,
+    );
+    final tagNameMap = {for (final tag in existingTags) tag.name: tag};
+
+    final existingEntryIdByName = <String, String>{};
+    cancellationToken?.throwIfCancellationRequested();
 
     // Import categories
     final categoryIdMap = <String, String>{};
-    final categoriesJson = data['categories'] as List? ?? [];
     for (final categoryJson in categoriesJson) {
+      cancellationToken?.throwIfCancellationRequested();
       final map = (categoryJson as Map).cast<String, dynamic>();
       final oldCategoryId = map['id'] as String?;
-      final created = await _upsertCategory(
-        name: map['name'] as String,
-        databaseId: targetDatabaseId,
-      );
+      final name = map['name'] as String;
+      final category =
+          categoryNameMap[name] ??
+          await _qrRepo.createCategory(
+            name: name,
+            databaseId: targetDatabaseId,
+          );
+      categoryNameMap[name] = category;
       if (oldCategoryId != null && oldCategoryId.isNotEmpty) {
-        categoryIdMap[oldCategoryId] = created.id;
+        categoryIdMap[oldCategoryId] = category.id;
       }
+      processed++;
+      _emitProgress(
+        onProgress,
+        phase: ImportExportProcessPhase.processingCategories,
+        processed: processed,
+        total: total,
+        message: 'カテゴリをインポート中 ($processed/$total)',
+      );
     }
 
     // Import tags
     final tagIdMap = <String, String>{};
-    final tagsJson = data['tags'] as List? ?? [];
     for (final tagJson in tagsJson) {
+      cancellationToken?.throwIfCancellationRequested();
       final map = (tagJson as Map).cast<String, dynamic>();
       final oldTagId = map['id'] as String?;
-      final created = await _tagRepo.createTag(
-        name: tagJson['name'] as String,
-        color: tagJson['color'] as int?,
-        databaseId: targetDatabaseId,
-      );
+      final name = map['name'] as String;
+      final tag =
+          tagNameMap[name] ??
+          await _tagRepo.createTag(
+            name: name,
+            color: map['color'] as int?,
+            databaseId: targetDatabaseId,
+          );
+      tagNameMap[name] = tag;
       if (oldTagId != null && oldTagId.isNotEmpty) {
-        tagIdMap[oldTagId] = created.id;
+        tagIdMap[oldTagId] = tag.id;
       }
+      processed++;
+      _emitProgress(
+        onProgress,
+        phase: ImportExportProcessPhase.processingTags,
+        processed: processed,
+        total: total,
+        message: 'タグをインポート中 ($processed/$total)',
+      );
     }
 
     // Import entries
-    final entriesJson = data['entries'] as List? ?? [];
     for (final entryJson in entriesJson) {
+      cancellationToken?.throwIfCancellationRequested();
       final map = (entryJson as Map).cast<String, dynamic>();
-      final existing = await _qrRepo.getEntryByName(
+      final entryName = map['name'] as String;
+      var existingId = existingEntryIdByName[entryName];
+      existingId ??= await _qrRepo.getEntryIdByName(
         databaseId: targetDatabaseId,
-        name: map['name'] as String,
+        name: entryName,
       );
+      if (existingId != null) {
+        existingEntryIdByName[entryName] = existingId;
+      }
 
       final originalData = map['originalData'] as List?;
       if (originalData == null) continue;
@@ -306,7 +715,8 @@ class ExportRepository {
       final thumbnailData = map['thumbnail'] as List?;
       final originalTagIds = _extractTagIds(map['tags']);
       final tagIds = originalTagIds
-          .map((id) => tagIdMap[id] ?? id)
+          .map((id) => tagIdMap[id])
+          .whereType<String>()
           .toList(growable: false);
 
       final resolvedCategoryId = _resolveCategoryId(
@@ -320,9 +730,9 @@ class ExportRepository {
           ? Uint8List.fromList(thumbnailData.cast<int>())
           : null;
 
-      if (existing == null) {
-        await _qrRepo.createEntry(
-          name: map['name'] as String,
+      if (existingId == null) {
+        final created = await _qrRepo.createEntry(
+          name: entryName,
           description: importDescription,
           data: importData,
           chunkCount: (map['chunkCount'] as int?) ?? 1,
@@ -333,10 +743,11 @@ class ExportRepository {
           databaseId: targetDatabaseId,
           categoryId: resolvedCategoryId,
         );
+        existingEntryIdByName[entryName] = created.id;
       } else {
         await _qrRepo.overwriteEntryFromImport(
-          id: existing.id,
-          name: map['name'] as String,
+          id: existingId,
+          name: entryName,
           description: importDescription,
           data: importData,
           chunkCount: (map['chunkCount'] as int?) ?? 1,
@@ -349,7 +760,23 @@ class ExportRepository {
       }
 
       importedCount++;
+      processed++;
+      _emitProgress(
+        onProgress,
+        phase: ImportExportProcessPhase.processingEntries,
+        processed: processed,
+        total: total,
+        message: 'エントリをインポート中 ($importedCount/${entriesJson.length})',
+      );
     }
+
+    _emitProgress(
+      onProgress,
+      phase: ImportExportProcessPhase.completed,
+      processed: total,
+      total: total,
+      message: 'インポート完了',
+    );
 
     return importedCount;
   }
@@ -382,20 +809,25 @@ class ExportRepository {
     if (rawCategoryId is! String || rawCategoryId.isEmpty) {
       return null;
     }
-    return categoryIdMap[rawCategoryId] ?? rawCategoryId;
+    return categoryIdMap[rawCategoryId];
   }
 
-  /// カテゴリ名で重複を避けてカテゴリを取得または作成する。
-  Future<CategoryModel> _upsertCategory({
-    required String name,
-    required String databaseId,
-  }) async {
-    final categories = await _qrRepo.getCategoriesByDatabase(databaseId);
-    for (final category in categories) {
-      if (category.name == name) {
-        return category;
-      }
-    }
-    return _qrRepo.createCategory(name: name, databaseId: databaseId);
+  /// 進捗を通知する。
+  void _emitProgress(
+    ImportExportProgressCallback? onProgress, {
+    required ImportExportProcessPhase phase,
+    required int processed,
+    required int total,
+    required String message,
+  }) {
+    if (onProgress == null) return;
+    onProgress(
+      ImportExportProgress(
+        phase: phase,
+        processed: processed,
+        total: total,
+        message: message,
+      ),
+    );
   }
 }

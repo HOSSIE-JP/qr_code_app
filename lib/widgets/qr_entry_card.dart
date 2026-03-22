@@ -159,7 +159,12 @@ class QrEntryCard extends StatelessWidget {
   Widget _buildThumbnail(ColorScheme colorScheme) {
     Widget thumbnail;
     if (entry.thumbnail != null) {
-      thumbnail = Image.memory(entry.thumbnail!, fit: BoxFit.cover);
+      thumbnail = Image.memory(
+        entry.thumbnail!,
+        fit: BoxFit.cover,
+        cacheWidth: 192,
+        filterQuality: FilterQuality.low,
+      );
     } else {
       thumbnail = Container(
         color: colorScheme.surfaceContainerHighest,

@@ -1,0 +1,4 @@
+storeFile=/Users/yourname/secure/android/priqr-upload-key.jks
+storePassword=replace-with-store-password
+keyAlias=upload
+keyPassword=replace-with-key-password

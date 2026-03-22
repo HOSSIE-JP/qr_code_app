@@ -1,17 +1,27 @@
 # db_editor
 
-A new Flutter project.
+QR データの一覧編集・分類編集・保存形式変換を行う補助ツールです。
 
-## Getting Started
+## 対応プラットフォーム
 
-This project is a starting point for a Flutter application.
+- Windows
+- macOS
+- Web
 
-A few resources to get you started if this is your first Flutter project:
+## 起動
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```bash
+flutter run
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Web で起動する場合:
+
+```bash
+flutter run -d chrome
+```
+
+## Web ビルド
+
+```bash
+flutter build web
+```

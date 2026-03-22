@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -12,6 +12,7 @@ import 'package:qr_shared/qr_shared.dart';
 
 import 'editor_state.dart';
 import 'io/editor_file_service.dart';
+import 'io/web_download.dart';
 
 final editorStateProvider =
     NotifierProvider<EditorStateNotifier, EditorDocument>(
@@ -118,32 +119,74 @@ class _EditorPage extends ConsumerWidget {
               children: [
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          decoration: const InputDecoration(
-                            prefixIcon: Icon(Icons.search),
-                            labelText: 'フィルタ',
-                            hintText: '名前・説明・ID で検索',
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isNarrow = constraints.maxWidth < 920;
+                      if (isNarrow) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TextField(
+                              decoration: const InputDecoration(
+                                prefixIcon: Icon(Icons.search),
+                                labelText: 'フィルタ',
+                                hintText: '名前・説明・ID で検索',
+                              ),
+                              onChanged: notifier.updateFilter,
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _SortButton(
+                                  icon: Icons.sort_by_alpha,
+                                  label: '名前',
+                                  onTap: () =>
+                                      notifier.updateSort(EntrySortField.name),
+                                ),
+                                _SortButton(
+                                  icon: Icons.update,
+                                  label: '更新日',
+                                  onTap: () => notifier.updateSort(
+                                    EntrySortField.updatedAt,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        );
+                      }
+
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              decoration: const InputDecoration(
+                                prefixIcon: Icon(Icons.search),
+                                labelText: 'フィルタ',
+                                hintText: '名前・説明・ID で検索',
+                              ),
+                              onChanged: notifier.updateFilter,
+                            ),
                           ),
-                          onChanged: notifier.updateFilter,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _SortButton(
-                        icon: Icons.sort_by_alpha,
-                        label: '名前',
-                        onTap: () => notifier.updateSort(EntrySortField.name),
-                      ),
-                      const SizedBox(width: 8),
-                      _SortButton(
-                        icon: Icons.update,
-                        label: '更新日',
-                        onTap: () =>
-                            notifier.updateSort(EntrySortField.updatedAt),
-                      ),
-                    ],
+                          const SizedBox(width: 8),
+                          _SortButton(
+                            icon: Icons.sort_by_alpha,
+                            label: '名前',
+                            onTap: () =>
+                                notifier.updateSort(EntrySortField.name),
+                          ),
+                          const SizedBox(width: 8),
+                          _SortButton(
+                            icon: Icons.update,
+                            label: '更新日',
+                            onTap: () =>
+                                notifier.updateSort(EntrySortField.updatedAt),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 Expanded(
@@ -189,19 +232,24 @@ class _EditorPage extends ConsumerWidget {
         'yaml',
         'yml',
       ],
-      withData: false,
+      withData: kIsWeb,
     );
     if (result == null || result.files.isEmpty) {
       return;
     }
 
-    final path = result.files.single.path;
-    if (path == null) {
-      return;
-    }
-
     try {
-      final document = await EditorFileService.loadFromPath(path);
+      final file = result.files.single;
+      final document = kIsWeb
+          ? await EditorFileService.loadFromBytes(
+              fileName: file.name,
+              bytes:
+                  file.bytes ??
+                  (throw const FormatException('ブラウザからファイルデータを取得できませんでした。')),
+            )
+          : await EditorFileService.loadFromPath(
+              file.path ?? (throw const FormatException('ファイルパスを取得できませんでした。')),
+            );
       notifier.replaceDocument(document);
     } on Object catch (error) {
       if (!context.mounted) {
@@ -220,6 +268,31 @@ class _EditorPage extends ConsumerWidget {
   ) async {
     final format = await _selectSaveFormat(context, document.sourcePath);
     if (format == null) {
+      return;
+    }
+
+    if (kIsWeb) {
+      try {
+        final bytes = await EditorFileService.exportAsBytes(
+          extension: '.${format.extension}',
+          document: document,
+        );
+        downloadBytesOnWeb(
+          fileName: 'edited_data.${format.extension}',
+          bytes: bytes,
+          mimeType: format.mimeType,
+        );
+        notifier.markSaved('edited_data.${format.extension}');
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('ブラウザへ保存を開始しました。')));
+      } on Object catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('保存に失敗しました: $error')));
+      }
       return;
     }
 
@@ -256,6 +329,29 @@ class _EditorPage extends ConsumerWidget {
     BuildContext context, {
     required bool ods,
   }) async {
+    if (kIsWeb) {
+      try {
+        final bytes = await EditorFileService.createTemplateBytes(ods: ods);
+        downloadBytesOnWeb(
+          fileName: ods ? 'qr_template.ods' : 'qr_template.xlsx',
+          bytes: bytes,
+          mimeType: ods
+              ? 'application/vnd.oasis.opendocument.spreadsheet'
+              : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('雛形ファイルのダウンロードを開始しました。')));
+      } on Object catch (error) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('雛形生成に失敗しました: $error')));
+      }
+      return;
+    }
+
     final extension = ods ? '.ods' : '.xlsx';
     final path = await FilePicker.platform.saveFile(
       dialogTitle: ods ? 'ODS 雛形を保存' : 'Excel 雛形を保存',
@@ -291,7 +387,8 @@ class _EditorPage extends ConsumerWidget {
     String? sourcePath,
   ) async {
     final sourceExt = p.extension(sourcePath ?? '').toLowerCase();
-    final initial = _SaveFormat.values.firstWhere(
+    final availableFormats = _SaveFormat.availableOnCurrentPlatform;
+    final initial = availableFormats.firstWhere(
       (value) => '.${value.extension}' == sourceExt,
       orElse: () => _SaveFormat.qrjson,
     );
@@ -308,7 +405,7 @@ class _EditorPage extends ConsumerWidget {
                 initialValue: selected,
                 decoration: const InputDecoration(labelText: '形式'),
                 items: [
-                  for (final format in _SaveFormat.values)
+                  for (final format in availableFormats)
                     DropdownMenuItem<_SaveFormat>(
                       value: format,
                       child: Text(format.label),
@@ -351,6 +448,37 @@ enum _SaveFormat {
 
   final String label;
   final String extension;
+
+  String get mimeType {
+    switch (this) {
+      case _SaveFormat.qrdb:
+        return 'application/zip';
+      case _SaveFormat.qrjson:
+      case _SaveFormat.json:
+        return 'application/json';
+      case _SaveFormat.xlsx:
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      case _SaveFormat.ods:
+        return 'application/vnd.oasis.opendocument.spreadsheet';
+      case _SaveFormat.csv:
+        return 'text/csv';
+      case _SaveFormat.yaml:
+        return 'application/yaml';
+    }
+  }
+
+  static List<_SaveFormat> get availableOnCurrentPlatform {
+    if (!kIsWeb) {
+      return _SaveFormat.values;
+    }
+    return const <_SaveFormat>[
+      _SaveFormat.qrdb,
+      _SaveFormat.qrjson,
+      _SaveFormat.json,
+      _SaveFormat.xlsx,
+      _SaveFormat.ods,
+    ];
+  }
 }
 
 class _SortButton extends StatelessWidget {
@@ -387,74 +515,80 @@ class _EntryTable extends ConsumerWidget {
     final entries = notifier.visibleEntries;
 
     return SingleChildScrollView(
-      child: DataTable(
-        sortAscending: document.ascending,
-        columns: const [
-          DataColumn(label: Text('名前')),
-          DataColumn(label: Text('★')),
-          DataColumn(label: Text('T')),
-          DataColumn(label: Text('サイズ')),
-          DataColumn(label: Text('更新日')),
-          DataColumn(label: Text('削除')),
-        ],
-        rows: [
-          for (final entry in entries)
-            DataRow(
-              selected: selectedEntryId == entry.id,
-              onSelectChanged: (_) => onSelect(entry.id),
-              cells: [
-                DataCell(Text(entry.name)),
-                DataCell(
-                  Checkbox(
-                    value: entry.isFavorite,
-                    onChanged: (value) {
-                      if (value == null) return;
-                      notifier.setEntryFavorite(entry.id, value);
-                    },
+      scrollDirection: Axis.horizontal,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 760),
+        child: DataTable(
+          sortAscending: document.ascending,
+          columns: const [
+            DataColumn(label: Text('名前')),
+            DataColumn(label: Text('★')),
+            DataColumn(label: Text('T')),
+            DataColumn(label: Text('サイズ')),
+            DataColumn(label: Text('更新日')),
+            DataColumn(label: Text('削除')),
+          ],
+          rows: [
+            for (final entry in entries)
+              DataRow(
+                selected: selectedEntryId == entry.id,
+                onSelectChanged: (_) => onSelect(entry.id),
+                cells: [
+                  DataCell(Text(entry.name)),
+                  DataCell(
+                    Checkbox(
+                      value: entry.isFavorite,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        notifier.setEntryFavorite(entry.id, value);
+                      },
+                    ),
                   ),
-                ),
-                DataCell(
-                  Checkbox(
-                    value: entry.isTextMode,
-                    onChanged: (value) {
-                      if (value == null) return;
-                      notifier.setEntryTextMode(entry.id, value);
-                    },
+                  DataCell(
+                    Checkbox(
+                      value: entry.isTextMode,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        notifier.setEntryTextMode(entry.id, value);
+                      },
+                    ),
                   ),
-                ),
-                DataCell(Text('${entry.dataSize} bytes')),
-                DataCell(Text(entry.updatedAt.toLocal().toString())),
-                DataCell(
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    tooltip: 'エントリを削除',
-                    onPressed: () async {
-                      final confirmed = await showDialog<bool>(
-                        context: context,
-                        builder: (context) => AlertDialog(
-                          title: const Text('エントリ削除'),
-                          content: Text('「${entry.name}」を削除しますか？'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              child: const Text('キャンセル'),
-                            ),
-                            FilledButton(
-                              onPressed: () => Navigator.of(context).pop(true),
-                              child: const Text('削除'),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (confirmed == true) {
-                        notifier.deleteEntry(entry.id);
-                      }
-                    },
+                  DataCell(Text('${entry.dataSize} bytes')),
+                  DataCell(Text(entry.updatedAt.toLocal().toString())),
+                  DataCell(
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: 'エントリを削除',
+                      onPressed: () async {
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('エントリ削除'),
+                            content: Text('「${entry.name}」を削除しますか？'),
+                            actions: [
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(false),
+                                child: const Text('キャンセル'),
+                              ),
+                              FilledButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(true),
+                                child: const Text('削除'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirmed == true) {
+                          notifier.deleteEntry(entry.id);
+                        }
+                      },
+                    ),
                   ),
-                ),
-              ],
-            ),
-        ],
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }

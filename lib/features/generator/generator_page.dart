@@ -38,14 +38,25 @@ class _GeneratorPageState extends ConsumerState<GeneratorPage>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _nameController.text = _buildDefaultEntryName();
+    _nameController.addListener(_onFormChanged);
+    _textController.addListener(_onFormChanged);
   }
 
   @override
   void dispose() {
+    _nameController.removeListener(_onFormChanged);
+    _textController.removeListener(_onFormChanged);
     _tabController.dispose();
     _textController.dispose();
     _nameController.dispose();
     super.dispose();
+  }
+
+  /// 入力内容の変化でクリアアイコン表示を更新する。
+  void _onFormChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   @override
@@ -89,18 +100,32 @@ class _GeneratorPageState extends ConsumerState<GeneratorPage>
         children: [
           TextField(
             controller: _nameController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: '名称 *',
               hintText: 'QRコードの名前',
+              suffixIcon: _nameController.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: '入力をクリア',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () => _nameController.clear(),
+                    )
+                  : null,
             ),
           ),
           const SizedBox(height: 16),
           TextField(
             controller: _textController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'テキストデータ',
               hintText: 'QRコードに変換するテキストを入力',
               alignLabelWithHint: true,
+              suffixIcon: _textController.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: '入力をクリア',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () => _textController.clear(),
+                    )
+                  : null,
             ),
             maxLines: 10,
             minLines: 5,
@@ -126,9 +151,16 @@ class _GeneratorPageState extends ConsumerState<GeneratorPage>
         children: [
           TextField(
             controller: _nameController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: '名称 *',
               hintText: 'QRコードの名前',
+              suffixIcon: _nameController.text.isNotEmpty
+                  ? IconButton(
+                      tooltip: '入力をクリア',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () => _nameController.clear(),
+                    )
+                  : null,
             ),
           ),
           const SizedBox(height: 16),
@@ -436,5 +468,19 @@ class _GeneratorPageState extends ConsumerState<GeneratorPage>
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  /// 新規作成時に使うデフォルト名称を返す。
+  ///
+  /// 形式: yyyy/MM/dd HH:mm:ss
+  String _buildDefaultEntryName() {
+    final now = DateTime.now();
+    final year = now.year.toString().padLeft(4, '0');
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    final hour = now.hour.toString().padLeft(2, '0');
+    final minute = now.minute.toString().padLeft(2, '0');
+    final second = now.second.toString().padLeft(2, '0');
+    return '$year/$month/$day $hour:$minute:$second';
   }
 }

@@ -9,11 +9,28 @@
       "cwd": "${workspaceFolder}"
     },
     {
+      "name": "App: qr_code_app (OneDrive define入力)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "cwd": "${workspaceFolder}",
+      "toolArgs": [
+        "--dart-define=ONEDRIVE_CLIENT_ID=${input:oneDriveClientId}"
+      ]
+    },
+    {
       "name": "Tool: db_editor",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
       "cwd": "${workspaceFolder}/tools/db_editor"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "oneDriveClientId",
+      "type": "promptString",
+      "description": "OneDrive 用 Azure App Client ID を入力してください"
     }
   ]
 }

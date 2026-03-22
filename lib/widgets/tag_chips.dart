@@ -13,16 +13,20 @@ class TagChips extends StatelessWidget {
     this.selectedTagIds = const [],
     this.onTagToggled,
     this.selectable = false,
+    this.maxHeight,
   });
 
   final List<TagModel> tags;
   final List<String> selectedTagIds;
   final ValueChanged<String>? onTagToggled;
   final bool selectable;
+  final double? maxHeight;
 
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
+  /// タグ一覧を高さ制限付きで描画し、必要時は内部スクロールへ切り替える。
+  ///
+  /// タグ件数が多い場合でも、周辺の操作 UI を押し出さないことを目的とする。
+  Widget _buildScrollableChipArea(BuildContext context) {
+    final chips = Wrap(
       spacing: 8,
       runSpacing: 4,
       children: tags.map((tag) {
@@ -54,5 +58,25 @@ class TagChips extends StatelessWidget {
         );
       }).toList(),
     );
+
+    final effectiveMaxHeight = maxHeight;
+    if (effectiveMaxHeight == null) {
+      return chips;
+    }
+
+    return Scrollbar(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: effectiveMaxHeight),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.only(right: 4),
+          child: chips,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _buildScrollableChipArea(context);
   }
 }

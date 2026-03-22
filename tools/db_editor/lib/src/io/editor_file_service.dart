@@ -27,14 +27,41 @@ class EditorFileService {
       case '.qrdb':
         return _loadFromQrdbPath(filePath);
       case '.xlsx':
-        return _loadFromSpreadsheetPath(filePath, isOds: false);
+        return _loadFromSpreadsheetPath(filePath);
       case '.ods':
-        return _loadFromSpreadsheetPath(filePath, isOds: true);
+        return _loadFromSpreadsheetPath(filePath);
       case '.csv':
         return _loadFromCsvPath(filePath);
       case '.yaml':
       case '.yml':
         return _loadFromYamlPath(filePath);
+      default:
+        throw FormatException('未対応の拡張子です: $extension');
+    }
+  }
+
+  /// バイト列から読み込み形式を判定して [EditorDocument] を構築する。
+  ///
+  /// 主に Web のファイルピッカーで取得したデータを扱うために利用する。
+  static Future<EditorDocument> loadFromBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final extension = p.extension(fileName).toLowerCase();
+    switch (extension) {
+      case '.qrjson':
+      case '.json':
+        return _loadFromJsonBytes(fileName: fileName, bytes: bytes);
+      case '.qrdb':
+        return _loadFromQrdbBytes(fileName: fileName, bytes: bytes);
+      case '.xlsx':
+      case '.ods':
+        return _loadFromSpreadsheetBytes(fileName: fileName, bytes: bytes);
+      case '.csv':
+        return _loadFromCsvBytes(fileName: fileName, bytes: bytes);
+      case '.yaml':
+      case '.yml':
+        return _loadFromYamlBytes(fileName: fileName, bytes: bytes);
       default:
         throw FormatException('未対応の拡張子です: $extension');
     }
@@ -72,6 +99,32 @@ class EditorFileService {
     }
   }
 
+  /// 指定拡張子の内容をバイト列として出力する。
+  ///
+  /// Web ではファイルパスへ直接保存できないため、この結果をブラウザ側の
+  /// ダウンロード API へ渡す。
+  static Future<Uint8List> exportAsBytes({
+    required String extension,
+    required EditorDocument document,
+  }) async {
+    final normalized = extension.toLowerCase();
+    switch (normalized) {
+      case '.qrjson':
+      case '.json':
+        final map = _toStandardMap(document, inlineBinary: true);
+        final content = const JsonEncoder.withIndent('  ').convert(map);
+        return Uint8List.fromList(utf8.encode(content));
+      case '.qrdb':
+        return _encodeQrdb(document);
+      case '.xlsx':
+        return _encodeExcel(document, writeBinaryAssets: false);
+      case '.ods':
+        return _encodeOds(document, writeBinaryAssets: false);
+      default:
+        throw FormatException('Web 保存では未対応の拡張子です: $normalized');
+    }
+  }
+
   /// Excel/ODS の雛形ファイルを出力する。
   static Future<void> createTemplate({
     required String filePath,
@@ -89,6 +142,19 @@ class EditorFileService {
     await _saveAsExcel(filePath, template, writeBinaryAssets: false);
   }
 
+  /// 雛形ファイルをバイト列で生成する。
+  static Future<Uint8List> createTemplateBytes({required bool ods}) async {
+    final template = EditorDocument.empty().copyWith(
+      entries: [_sampleEntry()],
+      tags: [_sampleTag()],
+      categories: [_sampleCategory()],
+    );
+    if (ods) {
+      return _encodeOds(template, writeBinaryAssets: false);
+    }
+    return _encodeExcel(template, writeBinaryAssets: false);
+  }
+
   static Future<EditorDocument> _loadFromJsonPath(String filePath) async {
     final file = File(filePath);
     final content = await file.readAsString();
@@ -97,6 +163,22 @@ class EditorFileService {
       throw const FormatException('JSON のトップレベルが Map ではありません。');
     }
     return _documentFromStandardMap(decoded, sourcePath: filePath);
+  }
+
+  static Future<EditorDocument> _loadFromJsonBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final content = utf8.decode(bytes);
+    final decoded = jsonDecode(content);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('JSON のトップレベルが Map ではありません。');
+    }
+    return _documentFromStandardMap(
+      decoded,
+      sourcePath: fileName,
+      resolveRelativeAssets: false,
+    );
   }
 
   static Future<EditorDocument> _loadFromYamlPath(String filePath) async {
@@ -111,8 +193,28 @@ class EditorFileService {
     );
   }
 
+  static Future<EditorDocument> _loadFromYamlBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final parsed = loadYaml(utf8.decode(bytes));
+    final map = _yamlToMap(parsed);
+    return _documentFromStandardMap(
+      map,
+      sourcePath: fileName,
+      resolveRelativeAssets: false,
+    );
+  }
+
   static Future<EditorDocument> _loadFromQrdbPath(String filePath) async {
     final bytes = await File(filePath).readAsBytes();
+    return _loadFromQrdbBytes(fileName: filePath, bytes: bytes);
+  }
+
+  static Future<EditorDocument> _loadFromQrdbBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
     final archive = ZipDecoder().decodeBytes(bytes);
 
     final metadata =
@@ -163,24 +265,35 @@ class EditorFileService {
           ? metadata['version'] as int
           : kExportVersion,
       exportedAt: exportedAt,
-      sourcePath: filePath,
+      sourcePath: fileName,
       selectedEntryId: entries.isEmpty ? null : entries.first.id,
     );
   }
 
   static Future<EditorDocument> _loadFromSpreadsheetPath(
-    String filePath, {
-    required bool isOds,
-  }) async {
+    String filePath,
+  ) async {
     final bytes = await File(filePath).readAsBytes();
+    return _loadFromSpreadsheetBytes(fileName: filePath, bytes: bytes);
+  }
+
+  static Future<EditorDocument> _loadFromSpreadsheetBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
     final decoder = SpreadsheetDecoder.decodeBytes(bytes, update: false);
 
     final entriesRows = _sheetRows(decoder, 'entries');
     final tagsRows = _sheetRows(decoder, 'tags');
     final categoriesRows = _sheetRows(decoder, 'categories');
 
-    final baseDir = p.dirname(filePath);
-    final entryRows = _entriesFromTabularRows(entriesRows, baseDir: baseDir);
+    final hasDirectoryContext = p.dirname(fileName) != '.';
+    final baseDir = p.dirname(fileName);
+    final entryRows = _entriesFromTabularRows(
+      entriesRows,
+      baseDir: baseDir,
+      resolveRelativeAssets: hasDirectoryContext,
+    );
     final tags = _tagsFromTabularRows(tagsRows);
     final categories = _categoriesFromTabularRows(categoriesRows);
     final tagsById = {for (final tag in tags) tag.id: tag};
@@ -201,7 +314,7 @@ class EditorFileService {
       categories: categories,
       version: kExportVersion,
       exportedAt: DateTime.now().toUtc(),
-      sourcePath: filePath,
+      sourcePath: fileName,
       selectedEntryId: entries.isEmpty ? null : entries.first.id,
     );
   }
@@ -260,6 +373,33 @@ class EditorFileService {
     );
   }
 
+  static Future<EditorDocument> _loadFromCsvBytes({
+    required String fileName,
+    required Uint8List bytes,
+  }) async {
+    final entriesRows = const CsvToListConverter(
+      eol: '\n',
+      shouldParseNumbers: false,
+    ).convert(utf8.decode(bytes));
+
+    final entryRows = _entriesFromTabularRows(
+      entriesRows,
+      baseDir: p.dirname(fileName),
+      resolveRelativeAssets: false,
+    );
+    final entries = entryRows.map((row) => row.entry).toList();
+
+    return EditorDocument(
+      entries: entries,
+      tags: const <TagModel>[],
+      categories: const <CategoryModel>[],
+      version: kExportVersion,
+      exportedAt: DateTime.now().toUtc(),
+      sourcePath: fileName,
+      selectedEntryId: entries.isEmpty ? null : entries.first.id,
+    );
+  }
+
   static Future<void> _saveAsJson(
     String filePath,
     EditorDocument document,
@@ -287,75 +427,7 @@ class EditorFileService {
     String filePath,
     EditorDocument document,
   ) async {
-    final archive = Archive();
-
-    final metadata = <String, dynamic>{
-      'version': document.version,
-      'exportedAt': DateTime.now().toUtc().toIso8601String(),
-      'entryCount': document.entries.length,
-      'tagCount': document.tags.length,
-      'categoryCount': document.categories.length,
-    };
-
-    final entries = <Map<String, dynamic>>[];
-    for (final entry in document.entries) {
-      final entryJson = entry.toJson();
-      entryJson.remove('originalData');
-      entryJson.remove('thumbnail');
-      entries.add(entryJson);
-
-      archive.addFile(
-        ArchiveFile(
-          'data/${entry.id}.bin',
-          entry.originalData.length,
-          entry.originalData,
-        ),
-      );
-      if (entry.thumbnail != null) {
-        archive.addFile(
-          ArchiveFile(
-            'thumbnails/${entry.id}.png',
-            entry.thumbnail!.length,
-            entry.thumbnail!,
-          ),
-        );
-      }
-    }
-
-    archive.addFile(
-      ArchiveFile.string(
-        'metadata.json',
-        const JsonEncoder.withIndent('  ').convert(metadata),
-      ),
-    );
-    archive.addFile(
-      ArchiveFile.string(
-        'entries.json',
-        const JsonEncoder.withIndent('  ').convert(entries),
-      ),
-    );
-    archive.addFile(
-      ArchiveFile.string(
-        'tags.json',
-        const JsonEncoder.withIndent(
-          '  ',
-        ).convert(document.tags.map((e) => e.toJson()).toList()),
-      ),
-    );
-    archive.addFile(
-      ArchiveFile.string(
-        'categories.json',
-        const JsonEncoder.withIndent(
-          '  ',
-        ).convert(document.categories.map((e) => e.toJson()).toList()),
-      ),
-    );
-
-    final encoded = ZipEncoder().encode(archive);
-    if (encoded == null) {
-      throw const FileSystemException('ZIP エンコードに失敗しました。');
-    }
-    await File(filePath).writeAsBytes(encoded);
+    await File(filePath).writeAsBytes(await _encodeQrdb(document));
   }
 
   static Future<void> _saveAsExcel(
@@ -426,6 +498,145 @@ class EditorFileService {
       throw const FileSystemException('ODS のエンコードに失敗しました。');
     }
     await File(filePath).writeAsBytes(bytes);
+  }
+
+  static Future<Uint8List> _encodeQrdb(EditorDocument document) async {
+    final archive = Archive();
+
+    final metadata = <String, dynamic>{
+      'version': document.version,
+      'exportedAt': DateTime.now().toUtc().toIso8601String(),
+      'entryCount': document.entries.length,
+      'tagCount': document.tags.length,
+      'categoryCount': document.categories.length,
+    };
+
+    final entries = <Map<String, dynamic>>[];
+    for (final entry in document.entries) {
+      final entryJson = entry.toJson();
+      entryJson.remove('originalData');
+      entryJson.remove('thumbnail');
+      entries.add(entryJson);
+
+      archive.addFile(
+        ArchiveFile(
+          'data/${entry.id}.bin',
+          entry.originalData.length,
+          entry.originalData,
+        ),
+      );
+      if (entry.thumbnail != null) {
+        archive.addFile(
+          ArchiveFile(
+            'thumbnails/${entry.id}.png',
+            entry.thumbnail!.length,
+            entry.thumbnail!,
+          ),
+        );
+      }
+    }
+
+    archive.addFile(
+      ArchiveFile.string(
+        'metadata.json',
+        const JsonEncoder.withIndent('  ').convert(metadata),
+      ),
+    );
+    archive.addFile(
+      ArchiveFile.string(
+        'entries.json',
+        const JsonEncoder.withIndent('  ').convert(entries),
+      ),
+    );
+    archive.addFile(
+      ArchiveFile.string(
+        'tags.json',
+        const JsonEncoder.withIndent(
+          '  ',
+        ).convert(document.tags.map((e) => e.toJson()).toList()),
+      ),
+    );
+    archive.addFile(
+      ArchiveFile.string(
+        'categories.json',
+        const JsonEncoder.withIndent(
+          '  ',
+        ).convert(document.categories.map((e) => e.toJson()).toList()),
+      ),
+    );
+
+    final encoded = ZipEncoder().encode(archive);
+    if (encoded == null) {
+      throw const FileSystemException('ZIP エンコードに失敗しました。');
+    }
+    return Uint8List.fromList(encoded);
+  }
+
+  static Future<Uint8List> _encodeExcel(
+    EditorDocument document, {
+    required bool writeBinaryAssets,
+  }) async {
+    final excel = Excel.createExcel();
+    _writeTabularSheets(
+      writeSheet: (name, rows) {
+        final sheet = excel[name];
+        for (final row in rows) {
+          sheet.appendRow(row.map(TextCellValue.new).toList());
+        }
+      },
+      document: document,
+      baseDir: '.',
+      writeBinaryAssets: writeBinaryAssets,
+    );
+    if (excel.sheets.containsKey('Sheet1')) {
+      excel.delete('Sheet1');
+    }
+    final bytes = excel.encode();
+    if (bytes == null) {
+      throw const FileSystemException('Excel のエンコードに失敗しました。');
+    }
+    return Uint8List.fromList(bytes);
+  }
+
+  static Future<Uint8List> _encodeOds(
+    EditorDocument document, {
+    required bool writeBinaryAssets,
+  }) async {
+    final sheets = <String, List<List<String>>>{};
+    _writeTabularSheets(
+      writeSheet: (name, rows) => sheets[name] = rows,
+      document: document,
+      baseDir: '.',
+      writeBinaryAssets: writeBinaryAssets,
+    );
+
+    final archive = Archive();
+    archive.addFile(
+      ArchiveFile.string(
+        'mimetype',
+        'application/vnd.oasis.opendocument.spreadsheet',
+      ),
+    );
+    archive.addFile(
+      ArchiveFile.string('content.xml', _buildOdsContentXml(sheets)),
+    );
+    archive.addFile(
+      ArchiveFile.string(
+        'META-INF/manifest.xml',
+        '''<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">
+  <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/>
+  <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+</manifest:manifest>
+''',
+      ),
+    );
+
+    final bytes = ZipEncoder().encode(archive);
+    if (bytes == null) {
+      throw const FileSystemException('ODS のエンコードに失敗しました。');
+    }
+    return Uint8List.fromList(bytes);
   }
 
   static Future<void> _saveAsCsvBundle(
@@ -561,6 +772,7 @@ class EditorFileService {
   static List<_EntryRow> _entriesFromTabularRows(
     List<List<dynamic>> rows, {
     required String baseDir,
+    bool resolveRelativeAssets = true,
   }) {
     if (rows.isEmpty) {
       return <_EntryRow>[];
@@ -591,7 +803,7 @@ class EditorFileService {
       final thumbnailPath = readCell(row, 'thumbnailPath');
 
       Uint8List originalData = Uint8List(0);
-      if (dataFilePath.isNotEmpty) {
+      if (resolveRelativeAssets && dataFilePath.isNotEmpty) {
         final dataFile = File(p.join(baseDir, dataFilePath));
         if (dataFile.existsSync()) {
           originalData = dataFile.readAsBytesSync();
@@ -601,7 +813,7 @@ class EditorFileService {
       }
 
       Uint8List? thumbnail;
-      if (thumbnailPath.isNotEmpty) {
+      if (resolveRelativeAssets && thumbnailPath.isNotEmpty) {
         final thumbFile = File(p.join(baseDir, thumbnailPath));
         if (thumbFile.existsSync()) {
           thumbnail = Uint8List.fromList(thumbFile.readAsBytesSync());
@@ -774,6 +986,7 @@ class EditorFileService {
     Map<String, dynamic> map, {
     required String sourcePath,
     String? baseDirForRelativeAssets,
+    bool resolveRelativeAssets = true,
   }) {
     final tagsRaw = map['tags'] as List<dynamic>? ?? <dynamic>[];
     final categoriesRaw = map['categories'] as List<dynamic>? ?? <dynamic>[];
@@ -790,7 +1003,8 @@ class EditorFileService {
     for (final json in entriesRaw) {
       final entryMap = _normalizeMap(json);
       _normalizeBinaryFields(entryMap);
-      if (!entryMap.containsKey('originalData') &&
+      if (resolveRelativeAssets &&
+          !entryMap.containsKey('originalData') &&
           entryMap['dataFilePath'] is String) {
         final root = baseDirForRelativeAssets ?? p.dirname(sourcePath);
         final file = File(p.join(root, entryMap['dataFilePath'] as String));
@@ -798,7 +1012,8 @@ class EditorFileService {
             ? Uint8List.fromList(file.readAsBytesSync()).toList()
             : <int>[];
       }
-      if (!entryMap.containsKey('thumbnail') &&
+      if (resolveRelativeAssets &&
+          !entryMap.containsKey('thumbnail') &&
           entryMap['thumbnailPath'] is String) {
         final root = baseDirForRelativeAssets ?? p.dirname(sourcePath);
         final file = File(p.join(root, entryMap['thumbnailPath'] as String));

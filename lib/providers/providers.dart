@@ -1,3 +1,4 @@
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../core/storage/app_prefs.dart';
@@ -6,6 +7,8 @@ import '../data/repositories/export_repository.dart';
 import '../data/repositories/qr_repository.dart';
 import '../data/repositories/tag_repository.dart';
 import '../data/models/qr_entry_model.dart';
+import '../data/services/cloud_backup_service.dart';
+import '../data/services/import_file_picker_service.dart';
 
 part 'providers.g.dart';
 
@@ -210,24 +213,25 @@ class QrGenerationSettings extends _$QrGenerationSettings {
 Stream<List<QrEntryModel>> qrEntries(Ref ref) {
   final dbId = ref.watch(currentDatabaseIdProvider);
   final sortConfig = ref.watch(sortConfigProvider);
-  return ref.watch(qrRepositoryProvider).watchEntriesByDatabase(dbId).map((
-    entries,
-  ) {
-    final sorted = List<QrEntryModel>.from(entries);
-    sorted.sort((a, b) {
-      int cmp;
-      switch (sortConfig.field) {
-        case SortField.name:
-          cmp = a.name.compareTo(b.name);
-        case SortField.createdAt:
-          cmp = a.createdAt.compareTo(b.createdAt);
-        case SortField.updatedAt:
-          cmp = a.updatedAt.compareTo(b.updatedAt);
-      }
-      return sortConfig.ascending ? cmp : -cmp;
-    });
-    return sorted;
-  });
+  return ref
+      .watch(qrRepositoryProvider)
+      .watchEntrySummariesByDatabase(dbId)
+      .map((entries) {
+        final sorted = List<QrEntryModel>.from(entries);
+        sorted.sort((a, b) {
+          int cmp;
+          switch (sortConfig.field) {
+            case SortField.name:
+              cmp = a.name.compareTo(b.name);
+            case SortField.createdAt:
+              cmp = a.createdAt.compareTo(b.createdAt);
+            case SortField.updatedAt:
+              cmp = a.updatedAt.compareTo(b.updatedAt);
+          }
+          return sortConfig.ascending ? cmp : -cmp;
+        });
+        return sorted;
+      });
 }
 
 /// 指定 ID のエントリを取得する。
@@ -305,10 +309,37 @@ Future<List<QrEntryModel>> searchResults(Ref ref) {
   final dbId = ref.watch(currentDatabaseIdProvider);
   return ref
       .watch(qrRepositoryProvider)
-      .search(
+      .searchSummaries(
         textQuery: searchState.textQuery.isEmpty ? null : searchState.textQuery,
         tagIds: searchState.tagIds,
         databaseId: dbId,
         hasQrData: searchState.hasQrData,
       );
+}
+
+/// アプリ内表示用のバージョン文字列を返す。
+///
+/// 形式は `version+buildNumber`。
+/// buildNumber が空の場合は `version` のみ返す。
+@riverpod
+Future<String> appVersionLabel(Ref ref) async {
+  final packageInfo = await PackageInfo.fromPlatform();
+  final version = packageInfo.version;
+  final buildNumber = packageInfo.buildNumber;
+  if (buildNumber.isEmpty) {
+    return version;
+  }
+  return '$version+$buildNumber';
+}
+
+/// クラウドバックアップ連携サービス。
+@riverpod
+CloudBackupService cloudBackupService(Ref ref) {
+  return CloudBackupService();
+}
+
+/// Import 画面で利用するファイル選択サービス。
+@riverpod
+ImportFilePickerService importFilePickerService(Ref ref) {
+  return ImportFilePickerService();
 }

@@ -16,6 +16,9 @@ void main() {
       ProviderScope(
         overrides: [
           currentDatabaseIdProvider.overrideWith(() => CurrentDatabaseId()),
+          appVersionLabelProvider.overrideWith(
+            (ref) => Future.value('1.2.0+1'),
+          ),
           allDatabasesProvider.overrideWith(
             (ref) => Stream.value([
               QrDatabaseModel(
@@ -34,6 +37,8 @@ void main() {
     );
 
     await tester.pumpAndSettle();
+
+    expect(find.text('1.2.0+1'), findsOneWidget);
 
     final addCategoryTile = find.widgetWithText(ListTile, '新しいカテゴリを作成');
     await tester.scrollUntilVisible(addCategoryTile, 200);
@@ -64,6 +69,9 @@ void main() {
       ProviderScope(
         overrides: [
           currentDatabaseIdProvider.overrideWith(() => CurrentDatabaseId()),
+          appVersionLabelProvider.overrideWith(
+            (ref) => Future.value('1.2.0+1'),
+          ),
           allDatabasesProvider.overrideWith(
             (ref) => Stream.value([
               QrDatabaseModel(

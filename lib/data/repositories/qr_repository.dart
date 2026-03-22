@@ -173,6 +173,15 @@ class QrRepository {
         .asyncMap((entries) => Future.wait(entries.map(_toModel)));
   }
 
+  /// 指定データベースのエントリ要約をリアルタイム監視する。
+  ///
+  /// 一覧表示向けにタグの都度読込を省き、初期描画のレスポンスを改善する。
+  Stream<List<QrEntryModel>> watchEntrySummariesByDatabase(String databaseId) {
+    return _db.qrEntryDao
+        .watchEntrySummariesByDatabase(databaseId)
+        .map((entries) => entries.map(_toSummaryModel).toList(growable: false));
+  }
+
   /// 全エントリをリアルタイム監視するストリーム。
   Stream<List<QrEntryModel>> watchAllEntries() {
     return _db.qrEntryDao.watchAllEntries().asyncMap(
@@ -192,9 +201,36 @@ class QrRepository {
     required String databaseId,
     required String name,
   }) async {
-    final entry = await _db.qrEntryDao.getEntryByNameInDatabase(databaseId, name);
+    final entry = await _db.qrEntryDao.getEntryByNameInDatabase(
+      databaseId,
+      name,
+    );
     if (entry == null) return null;
     return _toModel(entry);
+  }
+
+  /// 指定データベース内で名称が一致するエントリ ID を取得する。
+  ///
+  /// インポート時の重複確認など、軽量な存在判定用途で使用する。
+  Future<String?> getEntryIdByName({
+    required String databaseId,
+    required String name,
+  }) {
+    return _db.qrEntryDao.getEntryIdByNameInDatabase(databaseId, name);
+  }
+
+  /// 指定データベースのエントリ名→ID対応を一括取得する。
+  ///
+  /// インポート時の重複判定で、1件ごとの問い合わせを避けるために利用する。
+  Future<Map<String, String>> getEntryNameIdMapByDatabase(String databaseId) {
+    return _db.qrEntryDao.getEntryNameIdMapByDatabase(databaseId);
+  }
+
+  /// 複数操作を単一トランザクションとして実行する。
+  ///
+  /// 大量インポート時のコミット回数を抑え、書き込みオーバーヘッドを軽減する。
+  Future<T> runInTransaction<T>(Future<T> Function() action) {
+    return _db.transaction(action);
   }
 
   /// 新規エントリを作成して返す。
@@ -397,6 +433,37 @@ class QrRepository {
     return Future.wait(entries.map(_toModel));
   }
 
+  /// 一覧表示向けの要約検索。
+  ///
+  /// タグの追加読込を省略し、カード描画に必要な最小情報のみ返す。
+  Future<List<QrEntryModel>> searchSummaries({
+    String? textQuery,
+    List<String> tagIds = const [],
+    String? databaseId,
+    bool? hasQrData,
+  }) async {
+    final normalizedTextQuery = textQuery?.trim();
+    final hasTextQuery =
+        normalizedTextQuery != null && normalizedTextQuery.isNotEmpty;
+    final hasTagFilter = tagIds.isNotEmpty;
+
+    if (!hasTextQuery && !hasTagFilter && databaseId != null) {
+      final entries = await _db.qrEntryDao.getEntrySummariesByDatabase(
+        databaseId,
+        hasQrData: hasQrData,
+      );
+      return entries.map(_toSummaryModel).toList(growable: false);
+    }
+
+    final entries = await _db.qrEntryDao.searchEntriesWithTags(
+      normalizedTextQuery,
+      tagIds,
+      databaseId: databaseId,
+      hasQrData: hasQrData,
+    );
+    return entries.map(_toSummaryModel).toList(growable: false);
+  }
+
   // --- 変換ヘルパー ---
 
   QrDatabaseModel _dbToModel(QrDatabase db) {
@@ -436,6 +503,26 @@ class QrRepository {
             ),
           )
           .toList(),
+    );
+  }
+
+  /// 一覧描画用の軽量モデルへ変換する。
+  QrEntryModel _toSummaryModel(QrEntry entry) {
+    return QrEntryModel(
+      id: entry.id,
+      databaseId: entry.databaseId,
+      categoryId: entry.categoryId,
+      name: entry.name,
+      description: entry.description,
+      originalData: Uint8List(0),
+      dataSize: entry.dataSize,
+      chunkCount: entry.chunkCount,
+      isTextMode: entry.isTextMode,
+      isFavorite: entry.isFavorite,
+      thumbnail: entry.thumbnail,
+      createdAt: entry.createdAt,
+      updatedAt: entry.updatedAt,
+      tags: const <TagModel>[],
     );
   }
 }
